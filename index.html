@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<!--
+  M1S · Late & Short — saulb96.github.io/late-short/
+  ─────────────────────────────────────────────────────────────────────────────
+  Reads the three lists the daily Function writes on /sites/Reports:
+    Shortage_Lines    one row per ERP line (Title = ORD#|STYLE); tool writes Ack* fields only
+    Shortage_Changes  append-only change log
+    Shortage_Runs     one row per run (status, counts, error text)
+  Auth: MSAL 2.38 (SPA), scope https://met1sol.sharepoint.com/AllSites.Write.
+  App registration: 0f167855-bc37-4b16-8aab-df8047df434d — single tenant, SPA platform,
+  redirect = this page's URL, Assignment Required = No (every M1S account).
+  Users need Edit on the three lists (site Members or list-level grant).
+  "Refresh" sends the user's own Entra token (scope access_as_user on this same app registration) to the
+  Function's /api/run; the Function validates it and runs WITHOUT emailing (email is timer-only and rolls up
+  every change logged since the last emailed run). No function key in this file. Function App CORS must allow
+  https://saulb96.github.io. Sent-to-buyer: SentToBuyer / SentToBuyerDate / SentToBuyerBy, written by this page only.
+  Rules live in the Function (engine.py): Late = ETA used >= START; tracker ETA wins, ERP keyed ETA
+  is the fallback; Short from STATUS text; PO -> Round from Booking/Loaded section headers.
+  Acks: the Function clears an ack automatically when that line's ETA or CRD moves.
+-->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>M1S · Late & Short</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<script src="https://alcdn.msauth.net/browser/2.38.0/js/msal-browser.min.js"></script>
+<style>
+  :root{
+    --ink:#16202c; --muted:#5f6c7d;
+    --glass:rgba(255,255,255,.62); --glass2:rgba(255,255,255,.45);
+    --edge:rgba(255,255,255,.75); --shadow:0 8px 32px rgba(31,45,75,.12);
+    --accentink:#1b6fae; --sel:#1b6fae; --design:#f2734a; --grid:rgba(95,108,125,.16);
+    --late:#c2415f; --short:#9a6e0d; --amb:#7a4fc0; --landed:#1d7a55; --nosup:#4b5563; --past:#b4452f;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif; color:var(--ink); overflow-x:hidden;
+    background:linear-gradient(135deg,#e8f0fa 0%,#f3eef9 45%,#eaf6f1 100%)}
+  #bgArt{position:fixed; inset:0; z-index:0; opacity:.55; pointer-events:none}
+  .glass{background:var(--glass); backdrop-filter:blur(18px) saturate(1.4); -webkit-backdrop-filter:blur(18px) saturate(1.4);
+    border:1px solid var(--edge); box-shadow:var(--shadow); border-radius:18px}
+  .hidden{display:none !important}
+  button,select,input,textarea{font-family:inherit}
+
+  /* gate */
+  #gate{position:fixed; inset:0; z-index:60; display:flex; align-items:center; justify-content:center; padding:20px;
+    background:linear-gradient(135deg,#e8f0fa 0%,#f3eef9 45%,#eaf6f1 100%)}
+  .gate-card{max-width:380px; width:100%; padding:42px 40px; text-align:center}
+  .gate-card .logo{font-size:13px; letter-spacing:.35em; font-weight:700; color:var(--accentink); margin-bottom:14px}
+  .gate-card h2{font-size:24px; font-weight:700; letter-spacing:-.4px; margin-bottom:8px}
+  .gate-card p{font-size:13.5px; color:var(--muted); line-height:1.55; margin-bottom:24px}
+  .gate-err{margin-top:14px; font-size:12px; color:#b4452f; min-height:16px}
+  .gate-sub{margin-top:18px; font-size:11px; color:var(--muted)}
+
+  /* buttons + inputs */
+  .btn{font-size:12.5px; font-weight:600; padding:8px 13px; border-radius:11px; border:1px solid var(--edge);
+    background:rgba(255,255,255,.75); cursor:pointer; color:var(--ink); transition:.13s; white-space:nowrap}
+  .btn:hover{background:#fff; box-shadow:0 4px 12px rgba(31,45,75,.1)}
+  .btn:disabled{opacity:.55; cursor:default; box-shadow:none}
+  .btn.primary{color:#fff; background:linear-gradient(135deg,#2f9bd6,#1b6fae); box-shadow:0 6px 20px rgba(31,111,174,.3)}
+  .btn.primary:hover{box-shadow:0 9px 26px rgba(31,111,174,.4)}
+  .btn.sm{padding:6px 10px; font-size:11.5px}
+  .btn.link{background:none; border:none; box-shadow:none; color:var(--muted); text-decoration:underline; font-weight:500; padding:4px 6px}
+  input[type=text],input[type=search],select,textarea{font-size:12.5px; border-radius:11px; border:1px solid var(--edge);
+    background:rgba(255,255,255,.8); padding:7px 10px; color:var(--ink); outline:none; transition:.13s}
+  input:focus,select:focus,textarea:focus{background:#fff; box-shadow:0 0 0 3px rgba(47,155,214,.18)}
+  label.lbl{font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.12em; color:var(--muted); display:block; margin-bottom:4px}
+
+  /* shell */
+  #app{position:relative; z-index:1; min-height:100vh; padding:22px clamp(14px,3vw,38px)}
+  header.bar{display:flex; align-items:center; gap:16px; padding:14px 22px; margin-bottom:16px; flex-wrap:wrap}
+  .brand{font-size:12px; letter-spacing:.32em; font-weight:700; color:var(--accentink)}
+  .brand b{color:var(--ink)}
+  .asof{font-size:12px; color:var(--muted)}
+  .asof b{color:var(--ink); font-weight:600}
+  .asof .warn{color:var(--past); font-weight:600}
+  .who{margin-left:auto; text-align:right; font-size:12.5px; color:var(--muted); display:flex; align-items:center; gap:12px}
+  .who b{color:var(--ink); font-weight:600}
+  .signout{font-size:11.5px; color:var(--muted); text-decoration:underline; cursor:pointer; background:none; border:none}
+
+  /* summary counters double as filters */
+  .counters{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px}
+  .counter{padding:10px 14px; min-width:104px; cursor:pointer; border-radius:14px; transition:.13s; user-select:none;
+    background:rgba(255,255,255,.55); border:1px solid var(--edge)}
+  .counter:hover{background:rgba(255,255,255,.8)}
+  .counter.on{background:rgba(255,255,255,.92); box-shadow:0 4px 14px rgba(31,45,75,.12); border-color:rgba(27,111,174,.35)}
+  .counter .n{font-size:22px; font-weight:700; letter-spacing:-.5px; line-height:1.1}
+  .counter .l{font-size:11.5px; color:var(--muted); margin-top:2px}
+  .counter[data-k=late] .n{color:var(--late)} .counter[data-k=nosupply] .n{color:var(--nosup)}
+  .counter[data-k=short] .n{color:var(--short)} .counter[data-k=noeta] .n{color:var(--muted)}
+  .counter[data-k=ambiguous] .n{color:var(--amb)} .counter[data-k=landed] .n{color:var(--landed)}
+  .counter[data-k=pastcancel] .n{color:var(--past)} .counter[data-k=disc] .n{color:var(--design)}
+  .counter[data-k=acked] .n{color:var(--accentink)} .counter[data-k=sent] .n{color:var(--landed)}
+
+  .tabs{display:flex; gap:4px; margin-bottom:12px}
+  .tab{padding:8px 14px; border-radius:11px; font-size:13px; font-weight:600; cursor:pointer; color:var(--muted); border:1px solid transparent}
+  .tab:hover{background:var(--glass2); border-color:var(--edge)}
+  .tab.active{background:rgba(255,255,255,.85); color:var(--ink); border-color:var(--edge); box-shadow:0 4px 14px rgba(31,45,75,.10)}
+
+  .panel{padding:16px 18px}
+  .filters{display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:12px}
+  .filters .f{display:flex; flex-direction:column}
+  .filters .grow{flex:1; min-width:180px}
+  .filters .chk{display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--muted); padding-bottom:8px; cursor:pointer}
+  .filters .spacer{flex:1}
+  .meta{font-size:12px; color:var(--muted); margin-bottom:8px; display:flex; gap:14px; align-items:center}
+
+  /* table */
+  .tw{overflow:auto; max-height:calc(100vh - 330px); border:1px solid var(--edge); border-radius:13px; background:rgba(255,255,255,.55)}
+  table{border-collapse:separate; border-spacing:0; width:100%; font-size:12.5px}
+  th{position:sticky; top:0; z-index:2; background:rgba(240,245,251,.97); text-align:left; font-weight:600; padding:8px 9px;
+    border-bottom:1px solid var(--grid); white-space:nowrap; cursor:pointer; user-select:none}
+  th .arrow{color:var(--accentink); font-size:10px; margin-left:3px}
+  td{padding:6px 9px; border-bottom:1px solid var(--grid); white-space:nowrap; vertical-align:middle}
+  td.wrap{white-space:normal; min-width:180px}
+  tr.row{cursor:pointer}
+  tr.row:hover td{background:rgba(255,255,255,.78)}
+  tr.row.sel td{background:rgba(47,155,214,.10)}
+  tr.row.late td:first-child{box-shadow:inset 3px 0 0 var(--late)}
+  tr.row.inactive td{color:var(--muted); font-style:italic}
+  td.num{text-align:right; font-variant-numeric:tabular-nums}
+  td.dim{color:var(--muted)}
+  .pill{display:inline-block; font-size:10px; font-weight:700; letter-spacing:.04em; padding:2px 7px; border-radius:7px; margin-right:3px; white-space:nowrap}
+  .pill.late{background:rgba(194,65,95,.14); color:var(--late)}
+  .pill.lateerp{background:none; color:var(--late); border:1px solid rgba(194,65,95,.45)}
+  .pill.nosupply{background:rgba(75,85,99,.14); color:var(--nosup)}
+  .pill.short{background:rgba(224,169,46,.18); color:var(--short)}
+  .pill.noeta{background:none; color:var(--muted); border:1px dashed rgba(95,108,125,.5)}
+  .pill.ambiguous{background:rgba(148,102,214,.15); color:var(--amb)}
+  .pill.landed{background:rgba(54,163,122,.15); color:var(--landed)}
+  .pill.pastcancel{background:rgba(180,69,47,.14); color:var(--past)}
+  .pill.ponotfound{background:rgba(242,115,74,.16); color:#b4452f}
+  .pill.ack{background:rgba(47,155,214,.14); color:var(--accentink)}
+  .src{font-size:9.5px; font-weight:700; color:var(--muted); margin-left:4px; letter-spacing:.06em}
+  .src.erp{color:var(--design)}
+  .disc{color:var(--design); font-weight:600}
+  label.sent{display:flex; align-items:center; gap:5px; font-size:11.5px; color:var(--landed); cursor:pointer; white-space:nowrap}
+  label.sent input{accent-color:#36a37a; cursor:pointer}
+  .empty{padding:40px; text-align:center; color:var(--muted); font-size:13.5px}
+
+  /* changes view */
+  .runhdr{font-size:13.5px; font-weight:700; margin:14px 0 6px; display:flex; align-items:center; gap:10px}
+  .runhdr:first-child{margin-top:0}
+  .runhdr span{font-size:12px; color:var(--muted); font-weight:500}
+  .ct{display:inline-block; font-size:10px; font-weight:700; padding:2px 7px; border-radius:7px; background:rgba(47,155,214,.12); color:var(--accentink)}
+  .ct.bad{background:rgba(194,65,95,.14); color:var(--late)}
+  .ct.good{background:rgba(54,163,122,.15); color:var(--landed)}
+  .ct.warn{background:rgba(224,169,46,.18); color:var(--short)}
+  .errtxt{white-space:pre-wrap; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; color:#b4452f; max-width:640px}
+
+  /* drawer */
+  #drawer{position:fixed; top:0; right:0; bottom:0; width:min(460px,96vw); z-index:50; transform:translateX(105%); transition:transform .18s ease;
+    padding:22px 22px 26px; overflow:auto; border-radius:18px 0 0 18px; display:flex; flex-direction:column; gap:14px}
+  #drawer.open{transform:none}
+  #drawer h3{font-size:18px; font-weight:700; letter-spacing:-.3px; display:flex; align-items:center; gap:8px}
+  #drawer .close{margin-left:auto; width:30px; height:30px; border-radius:50%; border:1px solid var(--edge); background:rgba(255,255,255,.9); cursor:pointer; font-size:13px}
+  .kv{display:grid; grid-template-columns:118px 1fr; gap:5px 10px; font-size:12.5px}
+  .kv .k{color:var(--muted)}
+  .kv .v{font-weight:500}
+  .sect{font-size:9.5px; font-weight:700; text-transform:uppercase; letter-spacing:.12em; color:var(--muted); margin-bottom:6px}
+  .ackbox{background:rgba(255,255,255,.55); border:1px solid var(--edge); border-radius:13px; padding:12px}
+  .ackbox textarea{width:100%; min-height:64px; resize:vertical; margin-bottom:8px}
+  .ackbox .row{display:flex; gap:8px; align-items:center}
+  .ackbox .state{font-size:12px; color:var(--muted); flex:1}
+  .hist{font-size:12px}
+  .hist div{padding:5px 0; border-bottom:1px solid var(--grid)}
+  .hist .d{color:var(--muted); margin-right:6px}
+
+  .toast{position:fixed; bottom:18px; left:50%; transform:translateX(-50%); z-index:80; padding:10px 16px; font-size:12.5px; border-radius:12px;
+    background:rgba(22,32,44,.88); color:#fff; box-shadow:0 8px 24px rgba(0,0,0,.25); opacity:0; transition:opacity .15s; pointer-events:none}
+  .toast.show{opacity:1}
+  @media(prefers-reduced-motion:reduce){ *{transition:none !important} }
+  @media(max-width:760px){ .who{margin-left:0; width:100%; justify-content:flex-start} .tw{max-height:none} }
+</style>
+</head>
+<body>
+<canvas id="bgArt"></canvas>
+
+<div id="gate">
+  <div class="gate-card glass">
+    <div class="logo">M1S</div>
+    <h2>Late &amp; Short</h2>
+    <p>Customer orders at risk — late arrivals, shortages, and what changed since yesterday. Sign in with your Metro1 Microsoft account.</p>
+    <button class="btn primary" id="loginBtn">Sign in with Microsoft</button>
+    <div class="gate-err" id="gateErr"></div>
+    <div class="gate-sub">Internal use only</div>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <header class="bar glass">
+    <div class="brand">M1S <b>· LATE &amp; SHORT</b></div>
+    <div class="asof" id="asof">Loading…</div>
+    <div class="who">
+      <button class="btn sm" id="refreshBtn" title="Re-read the tracker and ERP export now, then reload">Refresh</button>
+      <span><b id="whoName">—</b></span>
+      <button class="signout" id="signOut">Sign out</button>
+    </div>
+  </header>
+
+  <div class="counters" id="counters"></div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="lines">Lines</div>
+    <div class="tab" data-tab="changes">Changes</div>
+    <div class="tab" data-tab="runs">Runs</div>
+  </div>
+
+  <section class="panel glass" id="linesPanel">
+    <div class="filters">
+      <div class="f grow"><label class="lbl" for="q">Search</label><input type="search" id="q" placeholder="style, customer PO, import PO, container…"></div>
+      <div class="f"><label class="lbl" for="fCust">Customer</label><select id="fCust"><option value="">All</option></select></div>
+      <div class="f"><label class="lbl" for="fFact">Factory</label><select id="fFact"><option value="">All</option></select></div>
+      <div class="f"><label class="lbl" for="fRound">Round</label><select id="fRound"><option value="">All</option></select></div>
+      <div class="f"><label class="lbl" for="fSrc">ETA source</label><select id="fSrc"><option value="">Any</option><option value="Tracker">Tracker</option><option value="ERP">ERP keyed</option><option value="">—</option></select></div>
+      <label class="chk"><input type="checkbox" id="hideAck" checked> Hide acknowledged</label>
+      <label class="chk"><input type="checkbox" id="showGone"> Show lines gone from ERP</label>
+      <div class="spacer"></div>
+      <button class="btn sm" id="clearF">Clear filters</button>
+      <button class="btn sm" id="csvBtn">Export CSV</button>
+    </div>
+    <div class="meta"><span id="lineCount"></span></div>
+    <div class="tw"><table id="linesTbl"><thead></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="panel glass hidden" id="changesPanel">
+    <div class="filters">
+      <div class="f"><label class="lbl" for="cType">Change type</label><select id="cType"><option value="">All</option></select></div>
+      <div class="f grow"><label class="lbl" for="cq">Search</label><input type="search" id="cq" placeholder="style, customer, import PO…"></div>
+    </div>
+    <div id="changesBody"></div>
+  </section>
+
+  <section class="panel glass hidden" id="runsPanel">
+    <div class="tw" style="max-height:calc(100vh - 260px)"><table id="runsTbl"><thead></thead><tbody></tbody></table></div>
+  </section>
+</div>
+
+<aside id="drawer" class="glass" aria-hidden="true">
+  <h3><span id="dTitle">—</span><button class="close" id="dClose" title="Close">&#10005;</button></h3>
+  <div id="dFlags"></div>
+  <div><div class="sect">Order</div><div class="kv" id="dOrder"></div></div>
+  <div><div class="sect">Supply</div><div class="kv" id="dSupply"></div></div>
+  <div><div class="sect">Acknowledge</div>
+    <div class="ackbox">
+      <textarea id="ackNote" placeholder="What was done — customer approved late ship, factory confirmed 9/12, moved to next PO…"></textarea>
+      <div class="row"><span class="state" id="ackState"></span><button class="btn sm" id="ackClear">Clear ack</button><button class="btn sm primary" id="ackSave">Acknowledge</button></div>
+    </div>
+  </div>
+  <div><div class="sect">Sent to buyer</div><div class="ackbox"><div class="row"><span class="state" id="sentState"></span><button class="btn sm" id="sentToggle">Mark sent</button></div></div></div>
+  <div><div class="sect">History</div><div class="hist" id="dHist"></div></div>
+</aside>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ───────────────────── config ───────────────────── */
+const MSAL_CONFIG = {
+  auth:{ clientId:"0f167855-bc37-4b16-8aab-df8047df434d",
+         authority:"https://login.microsoftonline.com/eeea7e3e-9ccb-4a16-894e-3417c6a7a4c1",
+         redirectUri:window.location.origin + window.location.pathname },
+  cache:{ cacheLocation:"localStorage" }
+};
+const SP_SCOPES = ["https://met1sol.sharepoint.com/AllSites.Write"];
+const SITE = "https://met1sol.sharepoint.com/sites/Reports";
+const LISTS = { lines:"Shortage_Lines", changes:"Shortage_Changes", runs:"Shortage_Runs" };
+const RUN_URL = "https://metro1-lateshort-fn.azurewebsites.net/api/run";
+const API_SCOPES = ["api://0f167855-bc37-4b16-8aab-df8047df434d/access_as_user"]; // token for the Function; no function key anywhere
+const STALE_HOURS = 30;
+
+/* ───────────────────── background (seeded flow field) ───────────────────── */
+(function(){
+  const c=document.getElementById('bgArt'), x=c.getContext('2d');
+  let W,H; function fit(){W=c.width=innerWidth;H=c.height=innerHeight;} fit(); addEventListener('resize',fit);
+  let seed=20260610; function rnd(){seed=(seed*1664525+1013904223)>>>0; return seed/4294967296;}
+  const hues=[[47,155,214],[148,102,214],[54,163,122],[242,115,74]];
+  const pts=[]; for(let i=0;i<70;i++){const h=hues[Math.floor(rnd()*hues.length)];
+    pts.push({x:rnd()*innerWidth,y:rnd()*innerHeight,a:rnd()*Math.PI*2,s:.25+rnd()*.4,c:h,r:.6+rnd()*1.4});}
+  function field(px,py,t){return Math.sin(px*.0016+t*.00012)*1.7+Math.cos(py*.0019-t*.00009)*1.7;}
+  const still=matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let t=0;
+  function tick(){
+    t++;
+    x.fillStyle='rgba(245,247,250,0.045)'; x.fillRect(0,0,W,H);
+    pts.forEach(p=>{
+      const a=field(p.x,p.y,t);
+      p.x+=Math.cos(a)*p.s; p.y+=Math.sin(a)*p.s;
+      if(p.x<-10)p.x=W+10; if(p.x>W+10)p.x=-10; if(p.y<-10)p.y=H+10; if(p.y>H+10)p.y=-10;
+      x.beginPath(); x.arc(p.x,p.y,p.r,0,7);
+      x.fillStyle='rgba('+p.c[0]+','+p.c[1]+','+p.c[2]+',0.18)'; x.fill();
+    });
+    if(!still) requestAnimationFrame(tick);
+  }
+  tick();
+})();
+
+/* ───────────────────── auth ───────────────────── */
+let msalApp=null, account=null;
+const $=id=>document.getElementById(id);
+const gate=$('gate'), app=$('app');
+
+async function initAuth(){
+  $('loginBtn').onclick=doLogin;
+  msalApp=new msal.PublicClientApplication(MSAL_CONFIG);
+  await msalApp.initialize();
+  try{const res=await msalApp.handleRedirectPromise(); if(res&&res.account){enter(res.account); return;}}catch(e){}
+  const accts=msalApp.getAllAccounts();
+  if(accts.length) enter(accts[0]);
+}
+async function doLogin(){
+  $('gateErr').textContent='';
+  const framed=window.self!==window.top;
+  try{
+    if(framed){ const res=await msalApp.loginPopup({scopes:SP_SCOPES}); if(res&&res.account) enter(res.account); }
+    else msalApp.loginRedirect({scopes:SP_SCOPES});
+  }catch(e){ $('gateErr').textContent='Sign-in failed: '+(e.errorMessage||e.message||e); }
+}
+async function token(force){
+  try{ const r=await msalApp.acquireTokenSilent({scopes:SP_SCOPES, account, forceRefresh:!!force}); return r.accessToken; }
+  catch(e){ if(window.self!==window.top){ const r=await msalApp.acquireTokenPopup({scopes:SP_SCOPES, account}); return r.accessToken; }
+            msalApp.acquireTokenRedirect({scopes:SP_SCOPES, account}); throw e; }
+}
+function enter(acct){
+  account=acct; msalApp.setActiveAccount(acct);
+  $('whoName').textContent=(acct.idTokenClaims&&acct.idTokenClaims.name)||acct.username;
+  gate.classList.add('hidden'); app.classList.remove('hidden');
+  $('signOut').onclick=()=>msalApp.logoutRedirect();
+  loadAll();
+}
+
+/* ───────────────────── SharePoint REST ───────────────────── */
+async function sp(url, opts, retry){
+  const tok=await token(!!retry);
+  const o=Object.assign({headers:{}}, opts||{});
+  o.headers=Object.assign({'Authorization':'Bearer '+tok,'Accept':'application/json;odata=nometadata'}, o.headers);
+  const r=await fetch(url, o);
+  if(r.status===401 && !retry) return sp(url, opts, true);
+  if(!r.ok){ let msg=''; try{ const j=await r.json(); msg=(j['odata.error']&&j['odata.error'].message&&j['odata.error'].message.value)||(j.error&&j.error.message&&j.error.message.value)||JSON.stringify(j).slice(0,300);}catch(e){ msg=await r.text(); }
+    throw new Error(r.status+' '+msg); }
+  if(r.status===204) return null;
+  return r.json();
+}
+async function spAll(list, query){
+  let url=`${SITE}/_api/web/lists/getbytitle('${list}')/items?${query}`, out=[];
+  while(url){ const j=await sp(url); out=out.concat(j.value||[]); url=j['odata.nextLink']||null; }
+  return out;
+}
+let entityType={};
+async function spMerge(list, id, fields){
+  if(!entityType[list]){ const j=await sp(`${SITE}/_api/web/lists/getbytitle('${list}')?$select=ListItemEntityTypeFullName`); entityType[list]=j.ListItemEntityTypeFullName; }
+  const body=Object.assign({'__metadata':{type:entityType[list]}}, fields);
+  return sp(`${SITE}/_api/web/lists/getbytitle('${list}')/items(${id})`, {method:'POST',
+    headers:{'Content-Type':'application/json;odata=verbose','Accept':'application/json;odata=verbose','X-HTTP-Method':'MERGE','IF-MATCH':'*'},
+    body:JSON.stringify(body)});
+}
+
+/* ───────────────────── data ───────────────────── */
+let lines=[], changes=[], runs=[], selected=null;
+const state={tab:'lines', flags:new Set(), sort:{k:'StartDate',d:1}};
+
+const LINE_SEL="Id,Title,Customer,OrdNo,CustPO,Style,QtyOrd,QtyAlc,QtyShp,StatusText,StatusKind,ShortQty,BookedQty,ImportPO,RoundNo,Container,Factory,CRD,ShipBy,ETD,ETA,ETASource,KeyedETA,StartDate,CancelDate,Flags,IsLate,SheetLoc,Landed,FirstSeen,LastChanged,Active,Acked,AckNote,AckBy,AckDate,AckETA,SentToBuyer,SentToBuyerDate,SentToBuyerBy";
+const CHG_SEL="Id,Title,RunDate,ChangeType,ChangedField,OldValue,NewValue,Customer,Style,ImportPO,Detail";
+const RUN_SEL="Id,Title,RunDate,TrackerModified,ReportFile,LinesRead,LateCount,NoSupplyCount,ShortCount,NoETACount,ChangeCount,RunStatus,ErrorText,DurationSec";
+
+async function loadAll(){
+  $('asof').textContent='Loading…';
+  try{
+    const [L,C,R]=await Promise.all([
+      spAll(LISTS.lines, `$select=${LINE_SEL}&$top=5000`),
+      spAll(LISTS.changes, `$select=${CHG_SEL}&$orderby=Id desc&$top=3000`),
+      spAll(LISTS.runs, `$select=${RUN_SEL}&$orderby=Id desc&$top=60`),
+    ]);
+    lines=L.map(normLine); changes=C; runs=R;
+    buildFilterOptions(); paintAsOf(); paintCounters(); paint();
+  }catch(e){ $('asof').innerHTML='<span class="warn">Could not read the lists: '+esc(e.message)+'</span>'; }
+}
+function normLine(r){
+  r._flags=(r.Flags||'').split(',').map(s=>s.trim()).filter(Boolean);
+  r._late=r.IsLate===true;
+  r._disc=!!(r.ETA&&r.KeyedETA&&r.ETASource==='Tracker'&&d10(r.ETA)!==d10(r.KeyedETA));
+  r._active=r.Active!==false;
+  r._acked=r.Acked===true;
+  r._sent=r.SentToBuyer===true;
+  r._hay=[r.Style,r.CustPO,r.ImportPO,r.Container,r.Customer,r.OrdNo,r.RoundNo,r.Factory,r.StatusText].join(' ').toLowerCase();
+  return r;
+}
+function d10(s){ return s?new Date(s).toLocaleDateString('en-CA',{timeZone:'America/New_York'}):''; }
+function fd(s){ return s?new Date(s).toLocaleDateString('en-US',{timeZone:'America/New_York',month:'numeric',day:'numeric',year:'2-digit'}):''; }
+function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),2600); }
+
+function paintAsOf(){
+  const last=runs[0];
+  if(!last){ $('asof').textContent='No runs yet'; return; }
+  const when=last.Title, ok=last.RunStatus&&last.RunStatus.startsWith('OK');
+  const ageH=(Date.now()-new Date(last.RunDate).getTime())/36e5;
+  let html=`As of <b>${esc(when)}</b> · ${esc(last.ReportFile||'')}`;
+  if(!ok) html+=` · <span class="warn">last run ${esc(last.RunStatus||'failed')} — see Runs</span>`;
+  else if(ageH>STALE_HOURS) html+=` · <span class="warn">no run in ${Math.round(ageH)} h</span>`;
+  $('asof').innerHTML=html;
+}
+
+/* counters double as flag filters */
+const COUNTERS=[
+  ['late','Late', r=>r._late],
+  ['nosupply','No supply', r=>r._flags.includes('NoSupply')],
+  ['short','Short', r=>(r.ShortQty||0)>0],
+  ['noeta','No ETA', r=>r._flags.includes('NoETA')],
+  ['ambiguous','Ambiguous', r=>r._flags.includes('Ambiguous')],
+  ['pastcancel','Past cancel', r=>r._flags.includes('PastCancel')],
+  ['landed','Landed', r=>r._flags.includes('Landed')],
+  ['disc','ERP ETA differs', r=>r._disc],
+  ['acked','Acknowledged', r=>r._acked],
+  ['sent','Sent to buyer', r=>r._sent],
+];
+function paintCounters(){
+  const act=lines.filter(r=>r._active);
+  $('counters').innerHTML=COUNTERS.map(([k,l,fn])=>`<div class="counter${state.flags.has(k)?' on':''}" data-k="${k}"><div class="n">${act.filter(fn).length}</div><div class="l">${l}</div></div>`).join('');
+  $('counters').querySelectorAll('.counter').forEach(el=>el.onclick=()=>{ const k=el.dataset.k; state.flags.has(k)?state.flags.delete(k):state.flags.add(k); if(k==='acked'&&state.flags.has(k)) $('hideAck').checked=false; setTab('lines'); paintCounters(); paint(); });
+}
+function buildFilterOptions(){
+  const fill=(id,vals)=>{ const s=$(id), cur=s.value; s.innerHTML='<option value="">All</option>'+vals.map(v=>`<option>${esc(v)}</option>`).join(''); s.value=cur; };
+  const act=lines.filter(r=>r._active);
+  fill('fCust',[...new Set(act.map(r=>r.Customer).filter(Boolean))].sort());
+  fill('fFact',[...new Set(act.map(r=>r.Factory).filter(Boolean))].sort());
+  fill('fRound',[...new Set(act.map(r=>r.RoundNo).filter(Boolean))].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true})));
+  const ct=$('cType'), cur=ct.value; ct.innerHTML='<option value="">All</option>'+[...new Set(changes.map(c=>c.ChangeType))].sort().map(v=>`<option>${esc(v)}</option>`).join(''); ct.value=cur;
+}
+
+/* ───────────────────── lines table ───────────────────── */
+const COLS=[
+  {k:'SentToBuyer',h:'Buyer',f:r=>`<label class="sent" title="${r._sent?'Sent '+fd(r.SentToBuyerDate)+' by '+esc(r.SentToBuyerBy||''):'Mark as sent to buyer'}"><input type="checkbox" data-sent="${r.Id}" ${r._sent?'checked':''}> ${r._sent?fd(r.SentToBuyerDate):''}</label>`},
+  {k:'Flags',h:'Flags',f:r=>flagPills(r)},
+  {k:'Customer',h:'Customer'},
+  {k:'Style',h:'Style'},
+  {k:'CustPO',h:'Cust PO'},
+  {k:'StartDate',h:'Start',d:1},
+  {k:'CancelDate',h:'Cancel',d:1},
+  {k:'QtyOrd',h:'Ord',n:1},
+  {k:'ShortQty',h:'Short',n:1,f:r=>r.ShortQty?`<b style="color:var(--short)">${r.ShortQty}</b>`:'<span class="dim">–</span>'},
+  {k:'StatusText',h:'ERP status'},
+  {k:'ImportPO',h:'Import PO'},
+  {k:'RoundNo',h:'Round'},
+  {k:'Factory',h:'Factory'},
+  {k:'CRD',h:'CRD',d:1},
+  {k:'ETD',h:'ETD',d:1},
+  {k:'ETA',h:'ETA',d:1,f:r=>r.ETA?fd(r.ETA)+(r.ETASource?`<span class="src ${r.ETASource==='ERP'?'erp':''}">${r.ETASource==='ERP'?'ERP':'TRK'}</span>`:''):'<span class="dim">–</span>'},
+  {k:'KeyedETA',h:'ERP ETA',d:1,f:r=>r.KeyedETA?(r._disc?`<span class="disc">${fd(r.KeyedETA)}</span>`:fd(r.KeyedETA)):'<span class="dim">–</span>'},
+  {k:'Container',h:'Container'},
+  {k:'LastChanged',h:'Changed',d:1},
+];
+function flagPills(r){
+  const m={'Late':'late','Late (ERP ETA)':'lateerp','NoSupply':'nosupply','Short':'short','NoETA':'noeta','Ambiguous':'ambiguous','Landed':'landed','PastCancel':'pastcancel','PONotFound':'ponotfound'};
+  const lbl={'NoSupply':'No supply','NoETA':'No ETA','PastCancel':'Past cancel','PONotFound':'PO not found','Late (ERP ETA)':'Late · ERP'};
+  let h=r._flags.map(f=>`<span class="pill ${m[f]||'nosupply'}">${esc(lbl[f]||f)}</span>`).join('');
+  if(r._acked) h+='<span class="pill ack">Acked</span>';
+  if(!r._active) h+='<span class="pill nosupply">Gone</span>';
+  return h||'<span class="dim">–</span>';
+}
+function filtered(){
+  const q=$('q').value.trim().toLowerCase(), cu=$('fCust').value, fa=$('fFact').value, ro=$('fRound').value, src=$('fSrc').value;
+  const hideAck=$('hideAck').checked, showGone=$('showGone').checked;
+  const tests=[...state.flags].map(k=>COUNTERS.find(c=>c[0]===k)[2]);
+  return lines.filter(r=>{
+    if(!showGone&&!r._active) return false;
+    if(hideAck&&r._acked) return false;
+    if(cu&&r.Customer!==cu) return false;
+    if(fa&&r.Factory!==fa) return false;
+    if(ro&&r.RoundNo!==ro) return false;
+    if(src&&r.ETASource!==src) return false;
+    if(q&&!r._hay.includes(q)) return false;
+    return tests.every(t=>t(r));
+  });
+}
+function sorted(rows){
+  const {k,d}=state.sort, col=COLS.find(c=>c.k===k)||{};
+  return rows.slice().sort((a,b)=>{
+    let x=k==='SentToBuyer'?a.SentToBuyerDate:a[k], y=k==='SentToBuyer'?b.SentToBuyerDate:b[k];
+    if(k==='SentToBuyer'){ x=x?new Date(x).getTime():Infinity; y=y?new Date(y).getTime():Infinity; return (x-y)*d; }
+    if(col.d){ x=x?new Date(x).getTime():Infinity; y=y?new Date(y).getTime():Infinity; }
+    else if(col.n){ x=+x||0; y=+y||0; }
+    else { x=String(x||''); y=String(y||''); const c=x.localeCompare(y,undefined,{numeric:true}); return c*d || String(a.Customer).localeCompare(String(b.Customer)); }
+    return (x-y)*d || String(a.Customer).localeCompare(String(b.Customer)) || String(a.Style).localeCompare(String(b.Style));
+  });
+}
+function paintLines(){
+  const rows=sorted(filtered());
+  $('lineCount').textContent=`${rows.length} of ${lines.filter(r=>r._active).length} lines`;
+  const th='<tr>'+COLS.map(c=>`<th data-k="${c.k}">${c.h}${state.sort.k===c.k?`<span class="arrow">${state.sort.d>0?'▲':'▼'}</span>`:''}</th>`).join('')+'</tr>';
+  const tb=rows.length?rows.map(r=>`<tr class="row${r._late?' late':''}${!r._active?' inactive':''}${selected&&selected.Id===r.Id?' sel':''}" data-id="${r.Id}">`+
+    COLS.map(c=>`<td class="${c.n?'num':''}">${c.f?c.f(r):(c.d?fd(r[c.k]):esc(r[c.k]))||'<span class="dim">–</span>'}</td>`).join('')+'</tr>').join('')
+    :`<tr><td colspan="${COLS.length}" class="empty">Nothing matches. Clear a filter or wait for the next run.</td></tr>`;
+  const t=$('linesTbl'); t.tHead.innerHTML=th; t.tBodies[0].innerHTML=tb;
+  t.tHead.querySelectorAll('th').forEach(el=>el.onclick=()=>{ const k=el.dataset.k; state.sort=state.sort.k===k?{k,d:-state.sort.d}:{k,d:1}; paintLines(); });
+  t.tBodies[0].querySelectorAll('tr.row').forEach(el=>el.onclick=()=>openDrawer(lines.find(r=>r.Id==el.dataset.id)));
+  t.tBodies[0].querySelectorAll('input[data-sent]').forEach(cb=>{ cb.onclick=e=>e.stopPropagation(); cb.onchange=()=>setSent(lines.find(r=>r.Id==cb.dataset.sent), cb.checked); });
+}
+
+/* ───────────────────── changes view ───────────────────── */
+const CT_CLASS={NewLate:'bad',CRDPushed:'bad',NoETA:'bad',LineGone:'good',NoLongerLate:'good',Landed:'good',LoadConfirmed:'good',ETADiscrepancy:'warn',AckCleared:'warn',ETAMoved:'warn'};
+function paintChanges(){
+  const ty=$('cType').value, q=$('cq').value.trim().toLowerCase();
+  const rows=changes.filter(c=>(!ty||c.ChangeType===ty)&&(!q||[c.Style,c.Customer,c.ImportPO,c.Title].join(' ').toLowerCase().includes(q)));
+  if(!rows.length){ $('changesBody').innerHTML='<div class="empty">No changes logged yet. The first run after baseline starts the log.</div>'; return; }
+  const groups={}; rows.forEach(c=>{ const k=d10(c.RunDate); (groups[k]=groups[k]||[]).push(c); });
+  $('changesBody').innerHTML=Object.keys(groups).sort().reverse().map(k=>{
+    const g=groups[k];
+    return `<div class="runhdr">${fd(g[0].RunDate)} <span>${g.length} change${g.length===1?'':'s'}</span></div>
+    <div class="tw" style="max-height:none"><table><thead><tr><th>Type</th><th>Customer</th><th>Style</th><th>Import PO</th><th>Field</th><th>From</th><th>To</th><th>Detail</th></tr></thead><tbody>`+
+    g.map(c=>`<tr class="row" data-key="${esc(c.Title)}"><td><span class="ct ${CT_CLASS[c.ChangeType]||''}">${esc(c.ChangeType)}</span></td><td>${esc(c.Customer)}</td><td>${esc(c.Style)}</td><td>${esc(c.ImportPO)}</td><td>${esc(c.ChangedField)}</td><td>${esc(c.OldValue)}</td><td>${esc(c.NewValue)}</td><td class="wrap dim">${esc(c.Detail)}</td></tr>`).join('')+
+    '</tbody></table></div>';
+  }).join('');
+  $('changesBody').querySelectorAll('tr.row').forEach(el=>el.onclick=()=>{ const r=lines.find(l=>l.Title===el.dataset.key); if(r) openDrawer(r); });
+}
+
+/* ───────────────────── runs view ───────────────────── */
+function paintRuns(){
+  const t=$('runsTbl');
+  t.tHead.innerHTML='<tr><th>Run</th><th>Status</th><th>Report file</th><th>Tracker saved</th><th>Lines</th><th>Late</th><th>No supply</th><th>Short</th><th>No ETA</th><th>Changes</th><th>Secs</th><th>Error</th></tr>';
+  t.tBodies[0].innerHTML=runs.length?runs.map(r=>`<tr><td>${esc(r.Title)}</td><td><span class="ct ${(r.RunStatus||'').startsWith('OK')?'good':'bad'}">${esc(r.RunStatus)}</span></td><td>${esc(r.ReportFile)}</td><td>${fd(r.TrackerModified)}</td>`+
+    `<td class="num">${r.LinesRead??''}</td><td class="num">${r.LateCount??''}</td><td class="num">${r.NoSupplyCount??''}</td><td class="num">${r.ShortCount??''}</td><td class="num">${r.NoETACount??''}</td><td class="num">${r.ChangeCount??''}</td><td class="num">${r.DurationSec??''}</td><td class="wrap"><div class="errtxt">${esc(r.ErrorText||'')}</div></td></tr>`).join('')
+    :'<tr><td colspan="12" class="empty">No runs recorded.</td></tr>';
+}
+
+/* ───────────────────── drawer ───────────────────── */
+function kv(pairs){ return pairs.map(([k,v])=>`<div class="k">${k}</div><div class="v">${v||'<span class="dim">–</span>'}</div>`).join(''); }
+function openDrawer(r){
+  selected=r;
+  $('dTitle').textContent=`${r.Style} · ${r.Customer}`;
+  $('dFlags').innerHTML=flagPills(r);
+  $('dOrder').innerHTML=kv([['Order',esc(r.OrdNo)],['Customer PO',esc(r.CustPO)],['Start → Cancel',fd(r.StartDate)+' → '+fd(r.CancelDate)],['Ordered / allocated',`${r.QtyOrd??''} / ${r.QtyAlc??''}`+(r.QtyShp?` (shipped ${r.QtyShp})`:'')],['ERP status',esc(r.StatusText)],['Short',r.ShortQty?`<b style="color:var(--short)">${r.ShortQty}</b>`:''],['ERP keyed ETA',r.KeyedETA?(r._disc?`<span class="disc">${fd(r.KeyedETA)} — tracker says ${fd(r.ETA)}</span>`:fd(r.KeyedETA)):'']]);
+  $('dSupply').innerHTML=kv([['Import PO',esc(r.ImportPO)],['Sheet',esc(r.SheetLoc)],['Round',esc(r.RoundNo)],['Container',esc(r.Container)],['Factory',esc(r.Factory)],['Booked qty (style)',r.BookedQty??''],['Ship by',fd(r.ShipBy)],['CRD',fd(r.CRD)],['ETD',fd(r.ETD)],['ETA used',r.ETA?fd(r.ETA)+` <span class="src ${r.ETASource==='ERP'?'erp':''}">${r.ETASource==='ERP'?'ERP keyed':'tracker'}</span>`:''],['First seen',fd(r.FirstSeen)],['Last changed',fd(r.LastChanged)]]);
+  $('ackNote').value=r.AckNote||'';
+  paintAckState(r); paintSentState(r);
+  const hist=changes.filter(c=>c.Title===r.Title);
+  $('dHist').innerHTML=hist.length?hist.map(c=>`<div><span class="d">${fd(c.RunDate)}</span><span class="ct ${CT_CLASS[c.ChangeType]||''}">${esc(c.ChangeType)}</span> ${c.OldValue?esc(c.OldValue)+' → ':''}${esc(c.NewValue)}${c.Detail?` <span class="dim">(${esc(c.Detail)})</span>`:''}</div>`).join(''):'<div class="dim">No changes logged for this line.</div>';
+  $('drawer').classList.add('open'); $('drawer').setAttribute('aria-hidden','false');
+  paintLines();
+}
+function paintAckState(r){
+  $('ackState').textContent=r._acked?`Acknowledged by ${r.AckBy||'—'} on ${fd(r.AckDate)}${r.AckETA?` (ETA was ${fd(r.AckETA)})`:''}`:'Not acknowledged. An ack clears itself if ETA or CRD moves.';
+  $('ackClear').disabled=!r._acked;
+}
+function paintSentState(r){
+  $('sentState').textContent=r._sent?`Sent ${fd(r.SentToBuyerDate)} by ${r.SentToBuyerBy||'—'}`:'Not sent to buyer yet.';
+  $('sentToggle').textContent=r._sent?'Clear':'Mark sent';
+  $('sentToggle').onclick=()=>setSent(r,!r._sent);
+}
+function closeDrawer(){ $('drawer').classList.remove('open'); $('drawer').setAttribute('aria-hidden','true'); selected=null; paintLines(); }
+$('dClose').onclick=closeDrawer;
+document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&$('drawer').classList.contains('open')) closeDrawer(); });
+
+async function saveAck(clear){
+  if(!selected) return; const r=selected;
+  const today=new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+  const fields=clear?{Acked:false}:{Acked:true, AckNote:$('ackNote').value.trim(), AckBy:$('whoName').textContent, AckDate:today+'T12:00:00Z', AckETA:r.ETA?d10(r.ETA)+'T12:00:00Z':null};
+  $('ackSave').disabled=true; $('ackClear').disabled=true;
+  try{
+    await spMerge(LISTS.lines, r.Id, fields);
+    Object.assign(r, fields); r._acked=!clear;
+    paintAckState(r); paintCounters(); paintLines();
+    toast(clear?'Acknowledgement cleared':'Acknowledged');
+  }catch(e){ toast('Could not save: '+e.message); }
+  finally{ $('ackSave').disabled=false; $('ackClear').disabled=!r._acked; }
+}
+async function setSent(r, on){
+  if(!r) return;
+  const today=new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+  const fields=on?{SentToBuyer:true, SentToBuyerDate:today+'T12:00:00Z', SentToBuyerBy:$('whoName').textContent}:{SentToBuyer:false, SentToBuyerDate:null, SentToBuyerBy:''};
+  try{ await spMerge(LISTS.lines, r.Id, fields); Object.assign(r, fields); r._sent=on; toast(on?'Marked sent to buyer':'Sent-to-buyer cleared'); }
+  catch(e){ toast('Could not save: '+e.message); }
+  paintCounters(); paintLines(); if(selected&&selected.Id===r.Id) paintSentState(r);
+}
+$('ackSave').onclick=()=>saveAck(false);
+$('ackClear').onclick=()=>saveAck(true);
+
+/* ───────────────────── refresh now (kick the Function, wait for its run row) ───────────────────── */
+async function apiToken(){
+  try{ return (await msalApp.acquireTokenSilent({scopes:API_SCOPES, account})).accessToken; }
+  catch(e){ if(window.self!==window.top) return (await msalApp.acquireTokenPopup({scopes:API_SCOPES, account})).accessToken;
+            msalApp.acquireTokenRedirect({scopes:API_SCOPES, account}); throw e; }
+}
+async function refreshNow(){
+  const btn=$('refreshBtn'); btn.disabled=true; btn.textContent='Refreshing…';
+  try{
+    const tok=await apiToken();
+    const r=await fetch(RUN_URL,{method:'POST',headers:{'Authorization':'Bearer '+tok}});
+    const j=await r.json().catch(()=>({}));
+    await loadAll();
+    if(r.status===429) toast(j.error||'Ran too recently — lists reloaded');
+    else if(!r.ok) toast(j.error||('Run failed: '+r.status));
+    else toast(`Refreshed — ${j.summary?j.summary.late+' late, '+j.changes+' change'+(j.changes===1?'':'s'):'ok'}`);
+  }catch(e){ toast('Could not refresh: '+(e.errorMessage||e.message||e)); }
+  btn.disabled=false; btn.textContent='Refresh';
+}
+$('refreshBtn').onclick=refreshNow;
+
+/* ───────────────────── CSV ───────────────────── */
+$('csvBtn').onclick=()=>{
+  const rows=sorted(filtered());
+  const cols=['Flags','Customer','OrdNo','CustPO','Style','StartDate','CancelDate','QtyOrd','QtyAlc','QtyShp','ShortQty','StatusText','ImportPO','RoundNo','Container','Factory','CRD','ShipBy','ETD','ETA','ETASource','KeyedETA','SheetLoc','Acked','AckNote','AckBy','SentToBuyer','SentToBuyerDate','SentToBuyerBy'];
+  const dcols=new Set(['StartDate','CancelDate','CRD','ShipBy','ETD','ETA','KeyedETA','SentToBuyerDate']);
+  const q=v=>`"${String(v==null?'':v).replace(/"/g,'""')}"`;
+  const csv=[cols.join(',')].concat(rows.map(r=>cols.map(c=>q(dcols.has(c)?fd(r[c]):r[c])).join(','))).join('\r\n');
+  const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv'})); a.download=`late-short-${new Date().toISOString().slice(0,10)}.csv`; a.click();
+};
+
+/* ───────────────────── tabs + filters ───────────────────── */
+function setTab(t){ state.tab=t; document.querySelectorAll('.tab').forEach(el=>el.classList.toggle('active',el.dataset.tab===t));
+  $('linesPanel').classList.toggle('hidden',t!=='lines'); $('changesPanel').classList.toggle('hidden',t!=='changes'); $('runsPanel').classList.toggle('hidden',t!=='runs'); paint(); }
+document.querySelectorAll('.tab').forEach(el=>el.onclick=()=>setTab(el.dataset.tab));
+function paint(){ if(state.tab==='lines') paintLines(); else if(state.tab==='changes') paintChanges(); else paintRuns(); }
+['q','fCust','fFact','fRound','fSrc','hideAck','showGone'].forEach(id=>$(id).addEventListener('input',paintLines));
+['cType','cq'].forEach(id=>$(id).addEventListener('input',paintChanges));
+$('clearF').onclick=()=>{ ['q','fCust','fFact','fRound','fSrc'].forEach(id=>$(id).value=''); $('hideAck').checked=true; $('showGone').checked=false; state.flags.clear(); paintCounters(); paintLines(); };
+
+initAuth();
+</script>
+</body>
+</html>
