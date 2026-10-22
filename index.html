@@ -391,7 +391,8 @@ async function loadAll(){
       listAll(LISTS.runs, RUN_SEL),
     ]);
     lines=L.map(normLine); changes=C.sort((a,b)=>b.Id-a.Id); runs=R.sort((a,b)=>b.Id-a.Id).slice(0,60);
-    if(selected){ const fresh=lines.find(x=>x.Id===selected.Id); if(fresh) openDrawer(fresh); else closeDrawer(); }
+    if(selected){ const fresh=lines.find(x=>x.Id===selected.Id), typed=$('dNote').value, dirty=typed.trim()!==(selected.LineNotes||'');
+      if(fresh){ openDrawer(fresh); if(dirty) $('dNote').value=typed; } else closeDrawer(); }
     buildFilterOptions(); paintAsOf(); paintIssueBadge(); if(!hashApplied){ applyHash(); hashApplied=true; } paintCounters(); paint();
   }catch(e){ $('asof').innerHTML='<span class="warn">Could not read the lists: '+esc(e.message)+'</span>'; }
 }
@@ -425,6 +426,7 @@ function paintAsOf(){
   const ageH=(Date.now()-new Date(last.RunDate).getTime())/36e5;
   let html=`As of <b>${esc(when)}</b> · ${esc(last.ReportFile||'')}`;
   if(!ok) html+=` · <span class="warn">last run ${esc(last.RunStatus||'failed')} — see Runs</span>`;
+  else if(/degraded/.test(last.RunStatus)) html+=` · <span class="warn">a forwarder or drayage report was not read — see Tracker issues</span>`;
   else if(ageH>STALE_HOURS) html+=` · <span class="warn">no run in ${Math.round(ageH)} h</span>`;
   $('asof').innerHTML=html;
 }
@@ -469,7 +471,7 @@ function buildFilterOptions(){
 /* ───────────────────── lines table ───────────────────── */
 const COLS=[
   {k:'SentToBuyer',h:'Buyer',f:r=>`<label class="sent${r._stale?' stale':''}" title="${r._stale?'Changed since sent '+fd(r.SentToBuyerDate)+' — click to mark re-sent':r._sent?'Sent '+fd(r.SentToBuyerDate)+' by '+esc(r.SentToBuyerBy||'')+' — click to clear':'Mark as sent to buyer'}"><input type="checkbox" data-sent="${r.Id}" ${r._sent?'checked':''}> ${r._stale?'<span style="color:#b4452f">re-send</span>':r._sent?fd(r.SentToBuyerDate):''}</label>`},
-  {k:'Reviewed',h:'Reviewed',f:r=>`<label class="rev" title="${r._rev?'Reviewed '+fd(r.ReviewedDate)+' by '+esc(r.ReviewedBy||'')+' — click to clear':r.ReviewedBy?'Changed since '+esc(r.ReviewedBy)+' reviewed it '+fd(r.ReviewedDate)+' — look again':'Mark as reviewed'}"><input type="checkbox" data-rev="${r.Id}" ${r._rev?'checked':''}> ${r._rev?fd(r.ReviewedDate):r.ReviewedBy?'<span style="color:#b4452f">again</span>':''}</label>`},
+  {k:'Reviewed',h:'Reviewed',f:r=>`<label class="rev" title="${r._rev?'Reviewed '+fd(r.ReviewedDate)+' by '+esc(r.ReviewedBy||'')+' — click to clear':r._needsRev&&r.ReviewedBy?'Changed since '+esc(r.ReviewedBy)+' reviewed it '+fd(r.ReviewedDate)+' — look again':'Mark as reviewed'}"><input type="checkbox" data-rev="${r.Id}" ${r._rev?'checked':''}> ${r._rev?fd(r.ReviewedDate):r._needsRev&&r.ReviewedBy?'<span style="color:#b4452f">again</span>':''}</label>`},
   {k:'Flags',h:'Flags',f:r=>flagPills(r)},
   {k:'Customer',h:'Customer'},
   {k:'CustPO',h:'Cust PO'},
@@ -580,8 +582,8 @@ const ISSUE_HELP={'Duplicate':'Same PO under two headers — the tool unions the
   'ERP link':'ERP import PO does not match the tracker; the line cannot be tracked until the ERP is fixed.',
   'Shipping':'The forwarder and drayage reports disagree about this container. Check with the forwarder or trucker.',
   'Tracker ETA':'The tracker sheet ETA is more than 3 days off what the forwarder / drayage report says. Update the tracker.',
-  'Forwarder':'Problem reading the forwarder report. Lines fall back to the tracker ETA.',
-  'Drayage':'Problem reading the drayage report. Lines fall back to the forwarder or tracker ETA.'};
+  'Forwarder':'Problem reading the forwarder report. If no recent file could be read, lines keep the last good dates and flags until it reads again.',
+  'Drayage':'Problem reading the drayage report. If no recent file could be read, lines keep the last good dates and flags until it reads again.'};
 function latestIssueRun(){ return runs.find(r=>(r.RunStatus||'').startsWith('OK')); }
 function paintIssueBadge(){ const r=latestIssueRun(); const n=r?(r.IssueCount||0):0; const b=$('issueBadge'); b.textContent=n; b.classList.toggle('hidden',!n); }
 function paintIssues(){
@@ -621,7 +623,7 @@ function paintSentState(r){
   $('sentToggle').onclick=()=>setSent(r, r._stale||!r._sent);
 }
 function paintRevState(r){
-  $('revState').innerHTML=r._rev?`Reviewed ${fd(r.ReviewedDate)} by ${esc(r.ReviewedBy||'')}`:r.ReviewedBy?`<span style="color:#b4452f">Changed since ${esc(r.ReviewedBy)} reviewed it ${fd(r.ReviewedDate)}</span>`:'Not reviewed';
+  $('revState').innerHTML=r._rev?`Reviewed ${fd(r.ReviewedDate)} by ${esc(r.ReviewedBy||'')}`:r._needsRev&&r.ReviewedBy?`<span style="color:#b4452f">Changed since ${esc(r.ReviewedBy)} reviewed it ${fd(r.ReviewedDate)}</span>`:'Not reviewed';
   $('revToggle').textContent=r._rev?'Clear':'Mark reviewed';
   $('revToggle').onclick=()=>setReviewed(r, !r._rev);
 }
@@ -632,7 +634,7 @@ async function setReviewed(r, on){
   const fields=on?{Reviewed:true, ReviewedDate:today+'T12:00:00Z', ReviewedBy:$('whoName').textContent, ReviewedSig:r.ReviewSig||''}:{Reviewed:false, ReviewedDate:null, ReviewedBy:'', ReviewedSig:''};
   try{ await patchItem(LISTS.lines, r.Id, fields); Object.assign(r, fields); normLine(r); toast(on?'Marked reviewed':'Reviewed cleared'); }
   catch(e){ toast('Could not save: '+e.message); }
-  paintCounters(); paintLines(); if(selected&&selected.Id===r.Id) paintRevState(r);
+  paintCounters(); paintLines(); if(selected&&selected.Id===r.Id){ paintRevState(r); $('dFlags').innerHTML=flagPills(r); }
 }
 async function setSent(r, on){
   if(r) r=lines.find(x=>x.Id===r.Id)||r;
@@ -645,7 +647,7 @@ async function setSent(r, on){
        r._flags=r._flags.filter(f=>f!=='ChangedSinceSent'); r.Flags=r._flags.join(', ');
        toast(on?(wasStale?'Marked re-sent to buyer':'Marked sent to buyer'):'Sent-to-buyer cleared'); }
   catch(e){ toast('Could not save: '+e.message); }
-  paintCounters(); paintLines(); if(selected&&selected.Id===r.Id) paintSentState(r);
+  paintCounters(); paintLines(); if(selected&&selected.Id===r.Id){ paintSentState(r); $('dFlags').innerHTML=flagPills(r); }
 }
 async function saveNote(r, text){
   if(!r) return; text=(text||'').trim(); if(text===(r.LineNotes||'')) return;
@@ -669,7 +671,7 @@ async function refreshNow(){
     await loadAll();
     if(r.status===429) toast(j.error||'Ran too recently — lists reloaded');
     else if(!r.ok) toast(j.error||('Run failed: '+r.status));
-    else toast(`Refreshed — ${j.summary?j.summary.late+' late, '+j.changes+' change'+(j.changes===1?'':'s'):'ok'}`);
+    else toast(`Refreshed — ${j.summary?j.summary.late+' late, '+j.changes+' change'+(j.changes===1?'':'s'):'ok'}`+(j.warnings&&j.warnings.length?' · '+j.warnings.join(' · '):''));
   }catch(e){ toast('Could not refresh: '+(e.errorMessage||e.message||e)); }
   btn.disabled=false; btn.textContent='Refresh';
 }
@@ -683,7 +685,7 @@ $('xlsxBtn').onclick=()=>{
   const spec=[{h:'Check',v:()=>'☐'}];
   COLS.forEach(c=>{
     if(c.k==='Flags') spec.push({h:'Flags',v:r=>[...r._flags, r._active?'':'Gone'].filter(Boolean).join(', ')});
-    else if(c.k==='Reviewed'){ spec.push({h:'Reviewed',v:r=>r._rev?asDate(r.ReviewedDate):null,d:1}); spec.push({h:'Reviewed by',v:r=>r._rev?(r.ReviewedBy||''):(r.ReviewedBy?'review again':'')}); }
+    else if(c.k==='Reviewed'){ spec.push({h:'Reviewed',v:r=>r._rev?asDate(r.ReviewedDate):null,d:1}); spec.push({h:'Reviewed by',v:r=>r._rev?(r.ReviewedBy||''):(r._needsRev&&r.ReviewedBy?'review again':'')}); }
     else if(c.k==='SentToBuyer'){ spec.push({h:'Sent to buyer',v:r=>asDate(r.SentToBuyerDate),d:1}); spec.push({h:'Sent by',v:r=>r.SentToBuyerBy||''}); }
     else if(c.k==='ETA'){ spec.push({h:'ETA',v:r=>asDate(r.ETA),d:1}); spec.push({h:'ETA source',v:r=>r.ETASource||''}); }
     else if(c.k==='ShipStatus') spec.push({h:'Status',v:r=>r.ShipStatus||''});
