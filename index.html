@@ -1,22 +1,4 @@
 <!DOCTYPE html>
-<!--
-  M1S · Late & Short — saulb96.github.io/late-short/
-  ─────────────────────────────────────────────────────────────────────────────
-  Reads the three lists the daily Function writes on /sites/Reports:
-    Shortage_Lines    one row per ERP line (Title = ORD#|STYLE); tool writes SentToBuyer*/SentETA/SentCRD/SentClass/SentShort/SentStale/LineNotes only
-    Shortage_Changes  append-only change log
-    Shortage_Runs     one row per run (status, counts, error text)
-  Auth: MSAL 2.38 (SPA), scope https://met1sol.sharepoint.com/AllSites.Write.
-  App registration: 0f167855-bc37-4b16-8aab-df8047df434d — single tenant, SPA platform,
-  redirect = this page's URL, Assignment Required = No (every M1S account).
-  Users need Edit on the three lists (site Members or list-level grant).
-  "Refresh" sends the user's own Entra token (scope access_as_user on this same app registration) to the
-  Function's /api/run; the Function validates it and runs WITHOUT emailing (email is timer-only and rolls up
-  every change logged since the last emailed run). No function key in this file. Function App CORS must allow
-  https://saulb96.github.io. Sent-to-buyer: SentToBuyer / SentToBuyerDate / SentToBuyerBy, written by this page only.
-  Rules live in the Function (engine.py): Late = ETA used >= START; tracker ETA wins, ERP keyed ETA
-  is the fallback; Short from STATUS text; PO -> Round from Booking/Loaded section headers.
--->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -98,6 +80,8 @@
   .counter[data-k=disc] .n{color:var(--design)}
   .counter[data-k=sent] .n{color:var(--landed)}
   .counter[data-k=tight] .n{color:var(--short)} .counter[data-k=future] .n{color:var(--accentink)} .counter[data-k=stale] .n{color:var(--design)}
+  .counter[data-k=notrev] .n{color:var(--accentink)} .counter[data-k=lfd] .n{color:var(--past)}
+  .counter[data-k=notrel] .n{color:var(--amb)} .counter[data-k=disagree] .n{color:var(--design)} .counter[data-k=reviewed] .n{color:var(--landed)}
 
   .tabs{display:flex; gap:4px; margin-bottom:12px}
   .tab{padding:8px 14px; border-radius:11px; font-size:13px; font-weight:600; cursor:pointer; color:var(--muted); border:1px solid transparent}
@@ -141,12 +125,20 @@
   .pill.ambiguous{background:rgba(148,102,214,.15); color:var(--amb)}
   .pill.landed{background:rgba(54,163,122,.15); color:var(--landed)}
   .pill.ponotfound{background:rgba(242,115,74,.16); color:#b4452f}
+  .pill.lfd{background:rgba(180,69,47,.16); color:var(--past)}
+  .pill.notrel{background:rgba(148,102,214,.15); color:var(--amb)}
+  .pill.disagree{background:none; color:var(--design); border:1px solid rgba(242,115,74,.55)}
+  .ship{font-size:11px; font-weight:600; white-space:nowrap}
+  .ship.port,.ship.avail{color:var(--short)} .ship.picked,.ship.deliv,.ship.landed{color:var(--landed)} .ship.water{color:var(--accentink)} .ship.none{color:var(--muted)}
+  .lfdsoon{color:var(--past); font-weight:700}
   .src{font-size:9.5px; font-weight:700; color:var(--muted); margin-left:4px; letter-spacing:.06em}
   .src.erp{color:var(--design)}
   .disc{color:var(--design); font-weight:600}
   label.sent{display:flex; align-items:center; gap:5px; font-size:11.5px; color:var(--landed); cursor:pointer; white-space:nowrap}
   label.sent input{accent-color:#36a37a; cursor:pointer}
   label.sent.stale input{accent-color:#f2734a}
+  label.rev{display:flex; align-items:center; gap:5px; font-size:11.5px; color:var(--accentink); cursor:pointer; white-space:nowrap}
+  label.rev input{accent-color:#1b6fae; cursor:pointer}
   input.note{width:220px; font-size:12px; padding:4px 8px; border-radius:8px; border:1px solid transparent; background:transparent}
   input.note:hover{border-color:var(--edge); background:rgba(255,255,255,.7)}
   input.note:focus{border-color:var(--edge); background:#fff}
@@ -206,7 +198,7 @@
     <div class="brand">M1S <b>· LATE &amp; SHORT</b></div>
     <div class="asof" id="asof">Loading…</div>
     <div class="who">
-      <button class="btn sm" id="refreshBtn" title="Re-read the tracker and ERP export now, then reload">Refresh</button>
+      <button class="btn sm" id="refreshBtn" title="Re-read the tracker, ERP export, forwarder and drayage reports now, then reload">Refresh</button>
       <span><b id="whoName">—</b></span>
       <button class="signout" id="signOut">Sign out</button>
     </div>
@@ -227,7 +219,8 @@
       <div class="f"><label class="lbl" for="fCust">Customer</label><select id="fCust"><option value="">All</option></select></div>
       <div class="f"><label class="lbl" for="fFact">Factory</label><select id="fFact"><option value="">All</option></select></div>
       <div class="f"><label class="lbl" for="fRound">Round</label><select id="fRound"><option value="">All</option></select></div>
-      <div class="f"><label class="lbl" for="fSrc">ETA source</label><select id="fSrc"><option value="">Any</option><option value="Tracker">Tracker</option><option value="ERP">ERP keyed</option><option value="">—</option></select></div>
+      <div class="f"><label class="lbl" for="fShip">Container status</label><select id="fShip"><option value="">All</option><option>Not shipped</option><option>On the water</option><option>At port</option><option>Available</option><option>Picked up</option><option>Delivered</option><option>Landed</option></select></div>
+      <div class="f"><label class="lbl" for="fSrc">ETA source</label><select id="fSrc"><option value="">Any</option><option value="Drayage">Drayage</option><option value="Forwarder">Forwarder</option><option value="Tracker">Tracker</option><option value="ERP">ERP keyed</option><option value="">—</option></select></div>
       <label class="chk"><input type="checkbox" id="showGone"> Show lines gone from ERP</label>
       <div class="spacer"></div>
       <button class="btn sm" id="copyLink" title="Copy a link that opens with the current filters">Copy link</button>
@@ -261,7 +254,9 @@
   <div id="dFlags"></div>
   <div><div class="sect">Order</div><div class="kv" id="dOrder"></div></div>
   <div><div class="sect">Supply</div><div class="kv" id="dSupply"></div></div>
+  <div><div class="sect">Container</div><div class="kv" id="dShip"></div></div>
   <div><div class="sect">Notes</div><textarea id="dNote" placeholder="Free-text notes for this line — saved when you click away" style="width:100%;min-height:56px;resize:vertical"></textarea></div>
+  <div><div class="sect">Reviewed</div><div class="ackbox"><div class="row"><span class="state" id="revState"></span><button class="btn sm" id="revToggle">Mark reviewed</button></div></div></div>
   <div><div class="sect">Sent to buyer</div><div class="ackbox"><div class="row"><span class="state" id="sentState"></span><button class="btn sm" id="sentToggle">Mark sent</button></div></div></div>
   <div><div class="sect">History</div><div class="hist" id="dHist"></div></div>
 </aside>
@@ -276,8 +271,10 @@ const MSAL_CONFIG = {
          redirectUri:window.location.origin + window.location.pathname },
   cache:{ cacheLocation:"localStorage" }
 };
-const SP_SCOPES = ["https://met1sol.sharepoint.com/AllSites.Write"];
-const SITE = "https://met1sol.sharepoint.com/sites/Reports";
+const GRAPH_SCOPES = ["https://graph.microsoft.com/Sites.ReadWrite.All"];
+const GRAPH = "https://graph.microsoft.com/v1.0";
+const SITE_PATH = "met1sol.sharepoint.com:/sites/Reports";   // where the Function writes the three lists
+const CHANGE_DAYS = 90;                                      // Changes tab shows this many days
 const LISTS = { lines:"Shortage_Lines", changes:"Shortage_Changes", runs:"Shortage_Runs" };
 const RUN_URL = "https://metro1-lateshort-fn.azurewebsites.net/api/run";
 const API_SCOPES = ["api://0f167855-bc37-4b16-8aab-df8047df434d/access_as_user"]; // token for the Function; no function key anywhere
@@ -326,14 +323,14 @@ async function doLogin(){
   $('gateErr').textContent='';
   const framed=window.self!==window.top;
   try{
-    if(framed){ const res=await msalApp.loginPopup({scopes:SP_SCOPES}); if(res&&res.account) enter(res.account); }
-    else { if(location.hash) sessionStorage.setItem('ls_hash', location.hash); msalApp.loginRedirect({scopes:SP_SCOPES}); }
+    if(framed){ const res=await msalApp.loginPopup({scopes:GRAPH_SCOPES}); if(res&&res.account) enter(res.account); }
+    else { if(location.hash) sessionStorage.setItem('ls_hash', location.hash); msalApp.loginRedirect({scopes:GRAPH_SCOPES}); }
   }catch(e){ $('gateErr').textContent='Sign-in failed: '+(e.errorMessage||e.message||e); }
 }
 async function token(force){
-  try{ const r=await msalApp.acquireTokenSilent({scopes:SP_SCOPES, account, forceRefresh:!!force}); return r.accessToken; }
-  catch(e){ if(window.self!==window.top){ const r=await msalApp.acquireTokenPopup({scopes:SP_SCOPES, account}); return r.accessToken; }
-            msalApp.acquireTokenRedirect({scopes:SP_SCOPES, account}); throw e; }
+  try{ const r=await msalApp.acquireTokenSilent({scopes:GRAPH_SCOPES, account, forceRefresh:!!force}); return r.accessToken; }
+  catch(e){ if(window.self!==window.top){ const r=await msalApp.acquireTokenPopup({scopes:GRAPH_SCOPES, account}); return r.accessToken; }
+            msalApp.acquireTokenRedirect({scopes:GRAPH_SCOPES, account}); throw e; }
 }
 function enter(acct){
   account=acct; msalApp.setActiveAccount(acct);
@@ -344,49 +341,56 @@ function enter(acct){
   loadAll();
 }
 
-/* ───────────────────── SharePoint REST ───────────────────── */
-async function sp(url, opts, retry){
+/* ───────────────────── Microsoft Graph ───────────────────── */
+async function gfetch(url, opts, retry){
   const tok=await token(!!retry);
   const o=Object.assign({headers:{}}, opts||{});
-  o.headers=Object.assign({'Authorization':'Bearer '+tok,'Accept':'application/json;odata=nometadata'}, o.headers);
-  const r=await fetch(url, o);
-  if(r.status===401 && !retry) return sp(url, opts, true);
-  if(!r.ok){ let msg=''; try{ const j=await r.json(); msg=(j['odata.error']&&j['odata.error'].message&&j['odata.error'].message.value)||(j.error&&j.error.message&&j.error.message.value)||JSON.stringify(j).slice(0,300);}catch(e){ msg=await r.text(); }
+  o.headers=Object.assign({'Authorization':'Bearer '+tok,'Accept':'application/json','Prefer':'HonorNonIndexedQueriesWarningMayFailRandomly'}, o.headers);
+  const r=await fetch(url.startsWith('http')?url:GRAPH+url, o);
+  if(r.status===401 && !retry) return gfetch(url, opts, true);
+  if(r.status===429 && (retry||0)<4){ await new Promise(res=>setTimeout(res, 1000*(+r.headers.get('Retry-After')||3))); return gfetch(url, opts, (retry||0)+1); }
+  if(!r.ok){ let msg=''; try{ const j=await r.json(); msg=(j.error&&j.error.message)||JSON.stringify(j).slice(0,300);}catch(e){ msg=await r.text(); }
     throw new Error(r.status+' '+msg); }
   if(r.status===204) return null;
   return r.json();
 }
-async function spAll(list, query){
-  let url=`${SITE}/_api/web/lists/getbytitle('${list}')/items?${query}`, out=[];
-  while(url){ const j=await sp(url); out=out.concat(j.value||[]); url=j['odata.nextLink']||null; }
+let siteId=null, listIds=null;
+async function ids(){
+  if(listIds) return listIds;
+  siteId=(await gfetch(`/sites/${SITE_PATH}?$select=id`)).id;
+  const all=(await gfetch(`/sites/${siteId}/lists?$select=id,displayName&$top=999`)).value||[];
+  listIds={}; Object.entries(LISTS).forEach(([k,name])=>{ const l=all.find(x=>x.displayName===name); if(!l) throw new Error(`List ${name} not found on the site`); listIds[name]=l.id; });
+  return listIds;
+}
+async function listAll(list, select, filter){
+  const L=await ids();
+  let url=`/sites/${siteId}/lists/${L[list]}/items?$expand=fields($select=${select})&$top=999`+(filter?`&$filter=${encodeURIComponent(filter)}`:''), out=[];
+  while(url){ const j=await gfetch(url); out=out.concat((j.value||[]).map(it=>Object.assign({}, it.fields, {Id:+it.id}))); url=j['@odata.nextLink']||null; }
   return out;
 }
-let entityType={};
-async function spMerge(list, id, fields){
-  if(!entityType[list]){ const j=await sp(`${SITE}/_api/web/lists/getbytitle('${list}')?$select=ListItemEntityTypeFullName`); entityType[list]=j.ListItemEntityTypeFullName; }
-  const body=Object.assign({'__metadata':{type:entityType[list]}}, fields);
-  return sp(`${SITE}/_api/web/lists/getbytitle('${list}')/items(${id})`, {method:'POST',
-    headers:{'Content-Type':'application/json;odata=verbose','Accept':'application/json;odata=verbose','X-HTTP-Method':'MERGE','IF-MATCH':'*'},
-    body:JSON.stringify(body)});
+async function patchItem(list, id, fields){
+  const L=await ids();
+  return gfetch(`/sites/${siteId}/lists/${L[list]}/items/${id}/fields`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify(fields)});
 }
 
 /* ───────────────────── data ───────────────────── */
 let lines=[], changes=[], runs=[], selected=null;
 const state={tab:'lines', flags:new Map(), sort:{k:'StartDate',d:1}}; // flags: chip -> 1 include, -1 exclude
 
-const LINE_SEL="Id,Title,Customer,OrdNo,CustPO,Style,QtyOrd,QtyAlc,QtyShp,StatusText,StatusKind,ShortQty,BookedQty,ImportPO,RoundNo,Container,Factory,CRD,ShipBy,ETD,ETA,ETASource,KeyedETA,StartDate,CancelDate,Flags,IsLate,SheetLoc,Landed,FirstSeen,LastChanged,Active,SentToBuyer,SentToBuyerDate,SentToBuyerBy,LineNotes,IsTight,ETAClass,IsFuture,SentETA,SentCRD,SentClass,SentShort,SentStale";
-const CHG_SEL="Id,Title,RunDate,ChangeType,ChangedField,OldValue,NewValue,Customer,Style,ImportPO,Detail";
-const RUN_SEL="Id,Title,RunDate,TrackerModified,ReportFile,LinesRead,LateCount,NoSupplyCount,ShortCount,NoETACount,ChangeCount,RunStatus,ErrorText,DurationSec,IssueCount,Issues";
+const LINE_SEL="Title,Customer,OrdNo,CustPO,Style,QtyOrd,QtyAlc,QtyShp,StatusText,StatusKind,ShortQty,BookedQty,ImportPO,RoundNo,Container,Factory,CRD,ShipBy,ETD,ETA,ETASource,KeyedETA,StartDate,CancelDate,Flags,IsLate,SheetLoc,Landed,FirstSeen,LastChanged,Active,SentToBuyer,SentToBuyerDate,SentToBuyerBy,LineNotes,IsTight,ETAClass,IsFuture,SentETA,SentCRD,SentClass,SentShort,SentStale,ShipStatus,WhseDate,LFD,PickupDate,DeliveryDate,Released,ShipNote,ReviewSig,Reviewed,ReviewedDate,ReviewedBy,ReviewedSig";
+const CHG_SEL="Title,RunDate,ChangeType,ChangedField,OldValue,NewValue,Customer,Style,ImportPO,Detail";
+const RUN_SEL="Title,RunDate,TrackerModified,ReportFile,ForwarderFile,DrayageFile,LinesRead,LateCount,NoSupplyCount,ShortCount,NoETACount,ChangeCount,RunStatus,ErrorText,DurationSec,IssueCount,Issues";
 
 async function loadAll(){
   $('asof').textContent='Loading…';
   try{
+    const since=new Date(Date.now()-CHANGE_DAYS*864e5).toISOString().slice(0,10)+'T00:00:00Z';
     const [L,C,R]=await Promise.all([
-      spAll(LISTS.lines, `$select=${LINE_SEL}&$top=5000`),
-      spAll(LISTS.changes, `$select=${CHG_SEL}&$orderby=Id desc&$top=3000`),
-      spAll(LISTS.runs, `$select=${RUN_SEL}&$orderby=Id desc&$top=60`),
+      listAll(LISTS.lines, LINE_SEL),
+      listAll(LISTS.changes, CHG_SEL, `fields/RunDate ge '${since}'`),
+      listAll(LISTS.runs, RUN_SEL),
     ]);
-    lines=L.map(normLine); changes=C; runs=R;
+    lines=L.map(normLine); changes=C.sort((a,b)=>b.Id-a.Id); runs=R.sort((a,b)=>b.Id-a.Id).slice(0,60);
     buildFilterOptions(); paintAsOf(); paintIssueBadge(); if(!hashApplied){ applyHash(); hashApplied=true; } paintCounters(); paint();
   }catch(e){ $('asof').innerHTML='<span class="warn">Could not read the lists: '+esc(e.message)+'</span>'; }
 }
@@ -397,9 +401,17 @@ function normLine(r){
   r._active=r.Active!==false;
   r._sent=r.SentToBuyer===true;
   r._tight=r.IsTight===true; r._future=r.IsFuture===true; r._stale=r.SentStale===true;
-  r._hay=[r.Style,r.CustPO,r.ImportPO,r.Container,r.Customer,r.OrdNo,r.RoundNo,r.Factory,r.StatusText,r.LineNotes].join(' ').toLowerCase();
+  r._rev=r.Reviewed===true;
+  r._needsRev=!r._rev && (r._late||r._tight||REVIEW_FLAGS.some(f=>r._flags.includes(f)));
+  r._lfdSoon=r._flags.includes('LFDRisk');
+  r._hay=[r.Style,r.CustPO,r.ImportPO,r.Container,r.Customer,r.OrdNo,r.RoundNo,r.Factory,r.StatusText,r.LineNotes,r.ShipStatus].join(' ').toLowerCase();
   return r;
 }
+const REVIEW_FLAGS=['LFDRisk','NotReleased','SourcesDisagree','NotInReports','PONotFound'];   // same list the Function uses, minus NoETA
+const SRC_TAG={Drayage:'DRAY',Forwarder:'FWD',Tracker:'TRK',ERP:'ERP'};
+const SHIP_CLS={'Not shipped':'none','On the water':'water','At port':'port','Available':'avail','Picked up':'picked','Delivered':'deliv','Landed':'landed'};
+function shipTag(r){ return r.ShipStatus?`<span class="ship ${SHIP_CLS[r.ShipStatus]||''}">${esc(r.ShipStatus)}</span>`:'<span class="dim">–</span>'; }
+function srcTag(r){ return r.ETASource?`<span class="src ${r.ETASource==='ERP'?'erp':''}">${SRC_TAG[r.ETASource]||esc(r.ETASource)}</span>`:''; }
 function d10(s){ return s?new Date(s).toLocaleDateString('en-CA',{timeZone:'America/New_York'}):''; }
 function fd(s){ return s?new Date(s).toLocaleDateString('en-US',{timeZone:'America/New_York',month:'numeric',day:'numeric',year:'2-digit'}):''; }
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
@@ -418,15 +430,20 @@ function paintAsOf(){
 
 /* counters double as flag filters */
 const COUNTERS=[
+  ['notrev','Not reviewed', r=>r._needsRev],
   ['late','Late', r=>r._late],
   ['tight','Tight', r=>r._tight],
   ['nosupply','No supply', r=>r._flags.includes('NoSupply')],
   ['short','Short', r=>(r.ShortQty||0)>0],
+  ['lfd','LFD risk', r=>r._flags.includes('LFDRisk')],
+  ['notrel','Not released', r=>r._flags.includes('NotReleased')],
+  ['disagree','Reports disagree', r=>r._flags.includes('SourcesDisagree')||r._flags.includes('NotInReports')],
   ['noeta','No ETA', r=>r._flags.includes('NoETA')],
   ['ambiguous','Ambiguous', r=>r._flags.includes('Ambiguous')],
   ['landed','Landed', r=>r._flags.includes('Landed')],
   ['future','Future (75d+)', r=>r._future],
   ['disc','ERP ETA differs', r=>r._disc],
+  ['reviewed','Reviewed', r=>r._rev],
   ['sent','Sent to buyer', r=>r._sent],
   ['stale','Changed since sent', r=>r._stale],
 ];
@@ -451,6 +468,7 @@ function buildFilterOptions(){
 /* ───────────────────── lines table ───────────────────── */
 const COLS=[
   {k:'SentToBuyer',h:'Buyer',f:r=>`<label class="sent${r._stale?' stale':''}" title="${r._stale?'Changed since sent '+fd(r.SentToBuyerDate)+' — click to mark re-sent':r._sent?'Sent '+fd(r.SentToBuyerDate)+' by '+esc(r.SentToBuyerBy||'')+' — click to clear':'Mark as sent to buyer'}"><input type="checkbox" data-sent="${r.Id}" ${r._sent?'checked':''}> ${r._stale?'<span style="color:#b4452f">re-send</span>':r._sent?fd(r.SentToBuyerDate):''}</label>`},
+  {k:'Reviewed',h:'Reviewed',f:r=>`<label class="rev" title="${r._rev?'Reviewed '+fd(r.ReviewedDate)+' by '+esc(r.ReviewedBy||'')+' — click to clear':r.ReviewedBy?'Changed since '+esc(r.ReviewedBy)+' reviewed it '+fd(r.ReviewedDate)+' — look again':'Mark as reviewed'}"><input type="checkbox" data-rev="${r.Id}" ${r._rev?'checked':''}> ${r._rev?fd(r.ReviewedDate):r.ReviewedBy?'<span style="color:#b4452f">again</span>':''}</label>`},
   {k:'Flags',h:'Flags',f:r=>flagPills(r)},
   {k:'Customer',h:'Customer'},
   {k:'CustPO',h:'Cust PO'},
@@ -465,21 +483,26 @@ const COLS=[
   {k:'StatusText',h:'ERP status'},
   {k:'CRD',h:'CRD',d:1},
   {k:'ETD',h:'ETD',d:1},
-  {k:'ETA',h:'ETA',d:1,f:r=>r.ETA?fd(r.ETA)+(r.ETASource?`<span class="src ${r.ETASource==='ERP'?'erp':''}">${r.ETASource==='ERP'?'ERP':'TRK'}</span>`:''):'<span class="dim">–</span>'},
+  {k:'ShipStatus',h:'Status',f:r=>shipTag(r)},
+  {k:'ETA',h:'ETA',d:1,f:r=>r.ETA?fd(r.ETA)+srcTag(r):'<span class="dim">–</span>'},
+  {k:'WhseDate',h:'Whse',d:1},
+  {k:'LFD',h:'LFD',d:1,f:r=>r.LFD?`<span class="${r._lfdSoon?'lfdsoon':''}">${fd(r.LFD)}</span>`:'<span class="dim">–</span>'},
+  {k:'PickupDate',h:'Pickup',d:1},
+  {k:'Released',h:'Released',f:r=>r.Released?(r.Released==='Yes'?'Yes':`<b style="color:var(--amb)">${esc(r.Released)}</b>`):'<span class="dim">–</span>'},
   {k:'KeyedETA',h:'ERP ETA',d:1,f:r=>r.KeyedETA?(r._disc?`<span class="disc">${fd(r.KeyedETA)}</span>`:fd(r.KeyedETA)):'<span class="dim">–</span>'},
   {k:'Container',h:'Container'},
   {k:'LastChanged',h:'Changed',d:1},
   {k:'LineNotes',h:'Notes',f:r=>`<input class="note" data-note="${r.Id}" value="${esc(r.LineNotes||'')}" placeholder="…">`},
 ];
 function flagPills(r){
-  const m={'Late':'late','Late (ERP ETA)':'lateerp','Tight':'tight','Tight (ERP ETA)':'tighterp','Future':'future','ChangedSinceSent':'stale','NoSupply':'nosupply','Short':'short','NoETA':'noeta','Ambiguous':'ambiguous','Landed':'landed','PONotFound':'ponotfound'};
-  const lbl={'NoSupply':'No supply','NoETA':'No ETA','PONotFound':'PO not found','Late (ERP ETA)':'Late · ERP','Tight (ERP ETA)':'Tight · ERP','ChangedSinceSent':'Changed since sent'};
+  const m={'LFDRisk':'lfd','NotReleased':'notrel','SourcesDisagree':'disagree','NotInReports':'disagree','Late':'late','Late (ERP ETA)':'lateerp','Tight':'tight','Tight (ERP ETA)':'tighterp','Future':'future','ChangedSinceSent':'stale','NoSupply':'nosupply','Short':'short','NoETA':'noeta','Ambiguous':'ambiguous','Landed':'landed','PONotFound':'ponotfound'};
+  const lbl={'LFDRisk':'LFD risk','NotReleased':'Not released','SourcesDisagree':'Reports disagree','NotInReports':'Not in reports','NoSupply':'No supply','NoETA':'No ETA','PONotFound':'PO not found','Late (ERP ETA)':'Late · ERP','Tight (ERP ETA)':'Tight · ERP','ChangedSinceSent':'Changed since sent'};
   let h=r._flags.map(f=>`<span class="pill ${m[f]||'nosupply'}">${esc(lbl[f]||f)}</span>`).join('');
   if(!r._active) h+='<span class="pill nosupply">Gone</span>';
   return h||'<span class="dim">–</span>';
 }
 function filtered(){
-  const q=$('q').value.trim().toLowerCase(), cu=$('fCust').value, fa=$('fFact').value, ro=$('fRound').value, src=$('fSrc').value;
+  const q=$('q').value.trim().toLowerCase(), cu=$('fCust').value, fa=$('fFact').value, ro=$('fRound').value, src=$('fSrc').value, sh=$('fShip').value;
   const showGone=$('showGone').checked;
   const tests=[...state.flags].map(([k,mode])=>{ const fn=COUNTERS.find(c=>c[0]===k)[2]; return r=>fn(r)===(mode===1); });
   return lines.filter(r=>{
@@ -488,6 +511,7 @@ function filtered(){
     if(fa&&r.Factory!==fa) return false;
     if(ro&&r.RoundNo!==ro) return false;
     if(src&&r.ETASource!==src) return false;
+    if(sh&&r.ShipStatus!==sh) return false;
     if(q&&!r._hay.includes(q)) return false;
     return tests.every(t=>t(r));
   });
@@ -495,8 +519,9 @@ function filtered(){
 function sorted(rows){
   const {k,d}=state.sort, col=COLS.find(c=>c.k===k)||{};
   return rows.slice().sort((a,b)=>{
-    let x=k==='SentToBuyer'?a.SentToBuyerDate:a[k], y=k==='SentToBuyer'?b.SentToBuyerDate:b[k];
-    if(k==='SentToBuyer'){ x=x?new Date(x).getTime():Infinity; y=y?new Date(y).getTime():Infinity; return (x-y)*d; }
+    const dk=k==='SentToBuyer'?'SentToBuyerDate':k==='Reviewed'?'ReviewedDate':k;
+    let x=a[dk], y=b[dk];
+    if(k==='SentToBuyer'||k==='Reviewed'){ x=x?new Date(x).getTime():Infinity; y=y?new Date(y).getTime():Infinity; return (x-y)*d; }
     if(col.d){ x=x?new Date(x).getTime():Infinity; y=y?new Date(y).getTime():Infinity; }
     else if(col.n){ x=+x||0; y=+y||0; }
     else { x=String(x||''); y=String(y||''); const c=x.localeCompare(y,undefined,{numeric:true}); return c*d || String(a.Customer).localeCompare(String(b.Customer)); }
@@ -514,11 +539,12 @@ function paintLines(){
   t.tHead.querySelectorAll('th').forEach(el=>el.onclick=()=>{ const k=el.dataset.k; state.sort=state.sort.k===k?{k,d:-state.sort.d}:{k,d:1}; paintLines(); });
   t.tBodies[0].querySelectorAll('tr.row').forEach(el=>el.onclick=()=>openDrawer(lines.find(r=>r.Id==el.dataset.id)));
   t.tBodies[0].querySelectorAll('input[data-sent]').forEach(cb=>{ cb.onclick=e=>e.stopPropagation(); cb.onchange=()=>{ const r=lines.find(x=>x.Id==cb.dataset.sent); if(r&&r._stale){ cb.checked=true; setSent(r,true); } else setSent(r, cb.checked); }; });
+  t.tBodies[0].querySelectorAll('input[data-rev]').forEach(cb=>{ cb.onclick=e=>e.stopPropagation(); cb.onchange=()=>setReviewed(lines.find(x=>x.Id==cb.dataset.rev), cb.checked); });
   t.tBodies[0].querySelectorAll('input[data-note]').forEach(inp=>{ inp.onclick=e=>e.stopPropagation(); inp.onkeydown=e=>{ if(e.key==='Enter') inp.blur(); }; inp.onchange=()=>saveNote(lines.find(r=>r.Id==inp.dataset.note), inp.value); });
 }
 
 /* ───────────────────── changes view ───────────────────── */
-const CT_CLASS={NewLate:'bad',CRDPushed:'bad',NoETA:'bad',LineGone:'good',NoLongerLate:'good',Landed:'good',LoadConfirmed:'good',ETADiscrepancy:'warn',ETAMoved:'warn',NewTight:'warn',ChangedAfterSent:'bad',Improved:'good'};
+const CT_CLASS={ETASlipped:'bad',NewLFDRisk:'bad',NewNotReleased:'warn',NewDisagree:'warn',NewNotInReports:'warn',ReviewCleared:'warn',ShipStatus:'good',NewLate:'bad',CRDPushed:'bad',NoETA:'bad',LineGone:'good',NoLongerLate:'good',Landed:'good',LoadConfirmed:'good',ETADiscrepancy:'warn',ETAMoved:'warn',NewTight:'warn',ChangedAfterSent:'bad',Improved:'good'};
 function paintChanges(){
   const ty=$('cType').value, q=$('cq').value.trim().toLowerCase();
   const rows=changes.filter(c=>(!ty||c.ChangeType===ty)&&(!q||[c.Style,c.Customer,c.ImportPO,c.Title].join(' ').toLowerCase().includes(q)));
@@ -537,8 +563,8 @@ function paintChanges(){
 /* ───────────────────── runs view ───────────────────── */
 function paintRuns(){
   const t=$('runsTbl');
-  t.tHead.innerHTML='<tr><th>Run</th><th>Status</th><th>Report file</th><th>Tracker saved</th><th>Lines</th><th>Late</th><th>No supply</th><th>Short</th><th>No ETA</th><th>Changes</th><th>Issues</th><th>Secs</th><th>Error</th></tr>';
-  t.tBodies[0].innerHTML=runs.length?runs.map(r=>`<tr><td>${esc(r.Title)}</td><td><span class="ct ${(r.RunStatus||'').startsWith('OK')?'good':'bad'}">${esc(r.RunStatus)}</span></td><td>${esc(r.ReportFile)}</td><td>${fd(r.TrackerModified)}</td>`+
+  t.tHead.innerHTML='<tr><th>Run</th><th>Status</th><th>Report files</th><th>Tracker saved</th><th>Lines</th><th>Late</th><th>No supply</th><th>Short</th><th>No ETA</th><th>Changes</th><th>Issues</th><th>Secs</th><th>Error</th></tr>';
+  t.tBodies[0].innerHTML=runs.length?runs.map(r=>`<tr><td>${esc(r.Title)}</td><td><span class="ct ${(r.RunStatus||'').startsWith('OK')?'good':'bad'}">${esc(r.RunStatus)}</span></td><td>${esc(r.ReportFile)}${r.ForwarderFile?'<br><span class="dim">'+esc(r.ForwarderFile)+'</span>':''}${r.DrayageFile?'<br><span class="dim">'+esc(r.DrayageFile)+'</span>':''}</td><td>${fd(r.TrackerModified)}</td>`+
     `<td class="num">${r.LinesRead??''}</td><td class="num">${r.LateCount??''}</td><td class="num">${r.NoSupplyCount??''}</td><td class="num">${r.ShortCount??''}</td><td class="num">${r.NoETACount??''}</td><td class="num">${r.ChangeCount??''}</td><td class="num">${r.IssueCount??''}</td><td class="num">${r.DurationSec??''}</td><td class="wrap"><div class="errtxt">${esc(r.ErrorText||'')}</div></td></tr>`).join('')
     :'<tr><td colspan="13" class="empty">No runs recorded.</td></tr>';
 }
@@ -550,7 +576,11 @@ const ISSUE_HELP={'Duplicate':'Same PO under two headers — the tool unions the
   'No ETA':'Round on Open with no ETA — lines on it fall back to the ERP keyed ETA or show No ETA.',
   'Round':'Booking header names a round with no row on Open or Complete.',
   'Header':'Section header starts with Round but no number could be read.',
-  'ERP link':'ERP import PO does not match the tracker; the line cannot be tracked until the ERP is fixed.'};
+  'ERP link':'ERP import PO does not match the tracker; the line cannot be tracked until the ERP is fixed.',
+  'Shipping':'The forwarder and drayage reports disagree about this container. Check with the forwarder or trucker.',
+  'Tracker ETA':'The tracker sheet ETA is more than 3 days off what the forwarder / drayage report says. Update the tracker.',
+  'Forwarder':'Problem reading the forwarder report. Lines fall back to the tracker ETA.',
+  'Drayage':'Problem reading the drayage report. Lines fall back to the forwarder or tracker ETA.'};
 function latestIssueRun(){ return runs.find(r=>(r.RunStatus||'').startsWith('OK')); }
 function paintIssueBadge(){ const r=latestIssueRun(); const n=r?(r.IssueCount||0):0; const b=$('issueBadge'); b.textContent=n; b.classList.toggle('hidden',!n); }
 function paintIssues(){
@@ -571,9 +601,10 @@ function openDrawer(r){
   $('dTitle').textContent=`${r.Style} · ${r.Customer}`;
   $('dFlags').innerHTML=flagPills(r);
   $('dOrder').innerHTML=kv([['Order',esc(r.OrdNo)],['Customer PO',esc(r.CustPO)],['Start → Cancel',fd(r.StartDate)+' → '+fd(r.CancelDate)],['Ordered / allocated',`${r.QtyOrd??''} / ${r.QtyAlc??''}`+(r.QtyShp?` (shipped ${r.QtyShp})`:'')],['ERP status',esc(r.StatusText)],['Short',r.ShortQty?`<b style="color:var(--short)">${r.ShortQty}</b>`:''],['ERP keyed ETA',r.KeyedETA?(r._disc?`<span class="disc">${fd(r.KeyedETA)} — tracker says ${fd(r.ETA)}</span>`:fd(r.KeyedETA)):'']]);
-  $('dSupply').innerHTML=kv([['Import PO',esc(r.ImportPO)],['Sheet',esc(r.SheetLoc)],['Round',esc(r.RoundNo)],['Container',esc(r.Container)],['Factory',esc(r.Factory)],['Booked qty (style)',r.BookedQty??''],['Ship by',fd(r.ShipBy)],['CRD',fd(r.CRD)],['ETD',fd(r.ETD)],['ETA used',r.ETA?fd(r.ETA)+` <span class="src ${r.ETASource==='ERP'?'erp':''}">${r.ETASource==='ERP'?'ERP keyed':'tracker'}</span>`:''],['First seen',fd(r.FirstSeen)],['Last changed',fd(r.LastChanged)]]);
+  $('dSupply').innerHTML=kv([['Import PO',esc(r.ImportPO)],['Sheet',esc(r.SheetLoc)],['Round',esc(r.RoundNo)],['Container',esc(r.Container)],['Factory',esc(r.Factory)],['Booked qty (style)',r.BookedQty??''],['Ship by',fd(r.ShipBy)],['CRD',fd(r.CRD)],['ETD',fd(r.ETD)],['ETA used',r.ETA?fd(r.ETA)+srcTag(r):''],['First seen',fd(r.FirstSeen)],['Last changed',fd(r.LastChanged)]]);
+  $('dShip').innerHTML=kv([['Status',shipTag(r)],['Port ETA',r.ETA?fd(r.ETA)+srcTag(r):''],['In our warehouse',fd(r.WhseDate)],['Last free day',r.LFD?`<span class="${r._lfdSoon?'lfdsoon':''}">${fd(r.LFD)}</span>`:''],['Pickup',fd(r.PickupDate)],['Delivery',fd(r.DeliveryDate)],['Released',esc(r.Released)],['Note',r.ShipNote?`<span class="disc">${esc(r.ShipNote)}</span>`:'']]);
   $('dNote').value=r.LineNotes||''; $('dNote').onblur=()=>{ saveNote(r,$('dNote').value); paintLines(); };
-  paintSentState(r);
+  paintSentState(r); paintRevState(r);
   const hist=changes.filter(c=>c.Title===r.Title);
   $('dHist').innerHTML=hist.length?hist.map(c=>`<div><span class="d">${fd(c.RunDate)}</span><span class="ct ${CT_CLASS[c.ChangeType]||''}">${esc(c.ChangeType)}</span> ${c.OldValue?esc(c.OldValue)+' → ':''}${esc(c.NewValue)}${c.Detail?` <span class="dim">(${esc(c.Detail)})</span>`:''}</div>`).join(''):'<div class="dim">No changes logged for this line.</div>';
   $('drawer').classList.add('open'); $('drawer').setAttribute('aria-hidden','false');
@@ -583,13 +614,31 @@ function closeDrawer(){ $('drawer').classList.remove('open'); $('drawer').setAtt
 $('dClose').onclick=closeDrawer;
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&$('drawer').classList.contains('open')) closeDrawer(); });
 
+function paintSentState(r){
+  $('sentState').innerHTML=r._stale?`<span style="color:#b4452f">Changed since sent ${fd(r.SentToBuyerDate)} — re-send</span>`:r._sent?`Sent ${fd(r.SentToBuyerDate)} by ${esc(r.SentToBuyerBy||'')}`:'Not sent';
+  $('sentToggle').textContent=r._stale?'Mark re-sent':r._sent?'Clear':'Mark sent';
+  $('sentToggle').onclick=()=>setSent(r, r._stale||!r._sent);
+}
+function paintRevState(r){
+  $('revState').innerHTML=r._rev?`Reviewed ${fd(r.ReviewedDate)} by ${esc(r.ReviewedBy||'')}`:r.ReviewedBy?`<span style="color:#b4452f">Changed since ${esc(r.ReviewedBy)} reviewed it ${fd(r.ReviewedDate)}</span>`:'Not reviewed';
+  $('revToggle').textContent=r._rev?'Clear':'Mark reviewed';
+  $('revToggle').onclick=()=>setReviewed(r, !r._rev);
+}
+async function setReviewed(r, on){
+  if(!r) return;
+  const today=new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'});
+  const fields=on?{Reviewed:true, ReviewedDate:today+'T12:00:00Z', ReviewedBy:$('whoName').textContent, ReviewedSig:r.ReviewSig||''}:{Reviewed:false, ReviewedDate:null, ReviewedBy:'', ReviewedSig:''};
+  try{ await patchItem(LISTS.lines, r.Id, fields); Object.assign(r, fields); normLine(r); toast(on?'Marked reviewed':'Reviewed cleared'); }
+  catch(e){ toast('Could not save: '+e.message); }
+  paintCounters(); paintLines(); if(selected&&selected.Id===r.Id) paintRevState(r);
+}
 async function setSent(r, on){
   if(!r) return;
   const today=new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'});
   const snap=on?{SentETA:r.ETA?d10(r.ETA)+'T12:00:00Z':null, SentCRD:r.CRD?d10(r.CRD)+'T12:00:00Z':null, SentClass:r.ETAClass||'', SentShort:r.ShortQty||0, SentStale:false}:{SentETA:null, SentCRD:null, SentClass:'', SentShort:0, SentStale:false};
   const fields=Object.assign(on?{SentToBuyer:true, SentToBuyerDate:today+'T12:00:00Z', SentToBuyerBy:$('whoName').textContent}:{SentToBuyer:false, SentToBuyerDate:null, SentToBuyerBy:''}, snap);
   const wasStale=r._stale;
-  try{ await spMerge(LISTS.lines, r.Id, fields); Object.assign(r, fields); r._sent=on; r._stale=false;
+  try{ await patchItem(LISTS.lines, r.Id, fields); Object.assign(r, fields); r._sent=on; r._stale=false;
        r._flags=r._flags.filter(f=>f!=='ChangedSinceSent'); r.Flags=r._flags.join(', ');
        toast(on?(wasStale?'Marked re-sent to buyer':'Marked sent to buyer'):'Sent-to-buyer cleared'); }
   catch(e){ toast('Could not save: '+e.message); }
@@ -597,7 +646,7 @@ async function setSent(r, on){
 }
 async function saveNote(r, text){
   if(!r) return; text=(text||'').trim(); if(text===(r.LineNotes||'')) return;
-  try{ await spMerge(LISTS.lines, r.Id, {LineNotes:text}); r.LineNotes=text; toast('Note saved'); }
+  try{ await patchItem(LISTS.lines, r.Id, {LineNotes:text}); r.LineNotes=text; toast('Note saved'); }
   catch(e){ toast('Could not save note: '+e.message); }
   if(selected&&selected.Id===r.Id) $('dNote').value=r.LineNotes||'';
 }
@@ -631,8 +680,10 @@ $('xlsxBtn').onclick=()=>{
   const spec=[{h:'Check',v:()=>'☐'}];
   COLS.forEach(c=>{
     if(c.k==='Flags') spec.push({h:'Flags',v:r=>[...r._flags, r._active?'':'Gone'].filter(Boolean).join(', ')});
+    else if(c.k==='Reviewed'){ spec.push({h:'Reviewed',v:r=>asDate(r.ReviewedDate),d:1}); spec.push({h:'Reviewed by',v:r=>r._rev?(r.ReviewedBy||''):''}); }
     else if(c.k==='SentToBuyer'){ spec.push({h:'Sent to buyer',v:r=>asDate(r.SentToBuyerDate),d:1}); spec.push({h:'Sent by',v:r=>r.SentToBuyerBy||''}); }
     else if(c.k==='ETA'){ spec.push({h:'ETA',v:r=>asDate(r.ETA),d:1}); spec.push({h:'ETA source',v:r=>r.ETASource||''}); }
+    else if(c.k==='ShipStatus') spec.push({h:'Status',v:r=>r.ShipStatus||''});
     else if(c.k==='LineNotes') spec.push({h:'Notes',v:r=>r.LineNotes||''});
     else if(c.d) spec.push({h:c.h,v:r=>asDate(r[c.k]),d:1});
     else if(c.n) spec.push({h:c.h,v:r=>r[c.k]==null?'':+r[c.k]});
@@ -655,7 +706,7 @@ function syncHash(){
   const p=new URLSearchParams();
   const f=[...state.flags].map(([k,m])=>(m===-1?'-':'')+k).join(','); if(f) p.set('f',f);
   if(state.tab!=='lines') p.set('tab',state.tab);
-  [['q','q'],['cust','fCust'],['fact','fFact'],['round','fRound'],['src','fSrc']].forEach(([n,id])=>{ if($(id).value) p.set(n,$(id).value); });
+  [['q','q'],['cust','fCust'],['fact','fFact'],['round','fRound'],['src','fSrc'],['ship','fShip']].forEach(([n,id])=>{ if($(id).value) p.set(n,$(id).value); });
   if($('showGone').checked) p.set('gone','1');
   const h=p.toString(); history.replaceState(null,'',location.pathname+(h?'#'+h:''));
 }
@@ -665,7 +716,7 @@ function applyHash(){
   try{
     const p=new URLSearchParams(raw);
     state.flags.clear(); (p.get('f')||'').split(',').filter(Boolean).forEach(t=>{ const ex=t.startsWith('-'), k=ex?t.slice(1):t; if(COUNTERS.some(c=>c[0]===k)) state.flags.set(k,ex?-1:1); });
-    [['q','q'],['cust','fCust'],['fact','fFact'],['round','fRound'],['src','fSrc']].forEach(([n,id])=>{ if(p.has(n)) $(id).value=p.get(n); });
+    [['q','q'],['cust','fCust'],['fact','fFact'],['round','fRound'],['src','fSrc'],['ship','fShip']].forEach(([n,id])=>{ if(p.has(n)) $(id).value=p.get(n); });
     $('showGone').checked=p.get('gone')==='1';
     const t=p.get('tab'); if(t&&['lines','changes','runs','issues'].includes(t)){ state.tab=t; document.querySelectorAll('.tab').forEach(el=>el.classList.toggle('active',el.dataset.tab===t)); ['lines','changes','runs','issues'].forEach(n=>$(n+'Panel').classList.toggle('hidden',t!==n)); }
   }finally{ applying=false; }
@@ -677,9 +728,9 @@ function setTab(t){ state.tab=t; document.querySelectorAll('.tab').forEach(el=>e
   ['lines','changes','runs','issues'].forEach(n=>$(n+'Panel').classList.toggle('hidden',t!==n)); paint(); syncHash(); }
 document.querySelectorAll('.tab').forEach(el=>el.onclick=()=>setTab(el.dataset.tab));
 function paint(){ if(state.tab==='lines') paintLines(); else if(state.tab==='changes') paintChanges(); else if(state.tab==='issues') paintIssues(); else paintRuns(); }
-['q','fCust','fFact','fRound','fSrc','showGone'].forEach(id=>$(id).addEventListener('input',()=>{ paintLines(); syncHash(); }));
+['q','fCust','fFact','fRound','fSrc','fShip','showGone'].forEach(id=>$(id).addEventListener('input',()=>{ paintLines(); syncHash(); }));
 ['cType','cq'].forEach(id=>$(id).addEventListener('input',paintChanges));
-$('clearF').onclick=()=>{ ['q','fCust','fFact','fRound','fSrc'].forEach(id=>$(id).value=''); $('showGone').checked=false; state.flags.clear(); paintCounters(); paintLines(); syncHash(); };
+$('clearF').onclick=()=>{ ['q','fCust','fFact','fRound','fSrc','fShip'].forEach(id=>$(id).value=''); $('showGone').checked=false; state.flags.clear(); paintCounters(); paintLines(); syncHash(); };
 
 initAuth();
 </script>
