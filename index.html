@@ -381,8 +381,10 @@ const LINE_SEL="Title,Customer,OrdNo,CustPO,Style,QtyOrd,QtyAlc,QtyShp,StatusTex
 const CHG_SEL="Title,RunDate,ChangeType,ChangedField,OldValue,NewValue,Customer,Style,ImportPO,Detail";
 const RUN_SEL="Title,RunDate,TrackerModified,ReportFile,ForwarderFile,DrayageFile,LinesRead,LateCount,NoSupplyCount,ShortCount,NoETACount,ChangeCount,RunStatus,ErrorText,DurationSec,IssueCount,Issues";
 
+const noteSaves={};   // Id -> {text, at}: notes saved while a reload was in flight
 async function loadAll(){
   $('asof').textContent='Loading…';
+  const t0=Date.now();
   try{
     const since=new Date(Date.now()-CHANGE_DAYS*864e5).toISOString().slice(0,10)+'T00:00:00Z';
     const [L,C,R]=await Promise.all([
@@ -391,13 +393,17 @@ async function loadAll(){
       listAll(LISTS.runs, RUN_SEL),
     ]);
     lines=L.map(normLine); changes=C.sort((a,b)=>b.Id-a.Id); runs=R.sort((a,b)=>b.Id-a.Id).slice(0,60);
+    lines.forEach(x=>{ const n=noteSaves[x.Id]; if(n&&n.at>=t0){ x.LineNotes=n.text; normLine(x); } });
+    const a=document.activeElement, nid=a&&a.matches&&a.matches('input[data-note]')?a.dataset.note:null, nv=nid?a.value:'', ns=nid?a.selectionStart:0;
     if(selected){ const fresh=lines.find(x=>x.Id===selected.Id), typed=$('dNote').value, dirty=typed.trim()!==(selected.LineNotes||'');
       if(fresh){ openDrawer(fresh); if(dirty) $('dNote').value=typed; } else closeDrawer(); }
     buildFilterOptions(); paintAsOf(); paintIssueBadge(); if(!hashApplied){ applyHash(); hashApplied=true; } paintCounters(); paint();
+    if(nid){ const inp=document.querySelector(`input[data-note="${nid}"]`); if(inp){ inp.value=nv; inp.focus(); inp.setSelectionRange(ns,ns); } }
   }catch(e){ $('asof').innerHTML='<span class="warn">Could not read the lists: '+esc(e.message)+'</span>'; }
 }
 function normLine(r){
   r._flags=(r.Flags||'').split(',').map(s=>s.trim()).filter(Boolean);
+  if(r.SentStale!==true) r._flags=r._flags.filter(f=>f!=='ChangedSinceSent');   // re-sent since the last run
   r._late=r.IsLate===true;
   r._disc=!!(r.ETA&&r.KeyedETA&&r.ETASource&&r.ETASource!=='ERP'&&d10(r.ETA)!==d10(r.KeyedETA));
   r._active=r.Active!==false;
@@ -426,8 +432,10 @@ function paintAsOf(){
   const ageH=(Date.now()-new Date(last.RunDate).getTime())/36e5;
   let html=`As of <b>${esc(when)}</b> · ${esc(last.ReportFile||'')}`;
   if(!ok) html+=` · <span class="warn">last run ${esc(last.RunStatus||'failed')} — see Runs</span>`;
-  else if(/degraded/.test(last.RunStatus)) html+=` · <span class="warn">a forwarder or drayage report was not read — see Tracker issues</span>`;
-  else if(ageH>STALE_HOURS) html+=` · <span class="warn">no run in ${Math.round(ageH)} h</span>`;
+  else{
+    if(/degraded/.test(last.RunStatus)) html+=` · <span class="warn">a forwarder or drayage report was not read — see Tracker issues</span>`;
+    if(ageH>STALE_HOURS) html+=` · <span class="warn">no run in ${Math.round(ageH)} h</span>`;
+  }
   $('asof').innerHTML=html;
 }
 
@@ -543,7 +551,7 @@ function paintLines(){
   t.tBodies[0].querySelectorAll('tr.row').forEach(el=>el.onclick=()=>openDrawer(lines.find(r=>r.Id==el.dataset.id)));
   t.tBodies[0].querySelectorAll('input[data-sent]').forEach(cb=>{ cb.onclick=e=>e.stopPropagation(); cb.onchange=()=>{ const r=lines.find(x=>x.Id==cb.dataset.sent); if(r&&r._stale){ cb.checked=true; setSent(r,true); } else setSent(r, cb.checked); }; });
   t.tBodies[0].querySelectorAll('input[data-rev]').forEach(cb=>{ cb.onclick=e=>e.stopPropagation(); cb.onchange=()=>setReviewed(lines.find(x=>x.Id==cb.dataset.rev), cb.checked); });
-  t.tBodies[0].querySelectorAll('input[data-note]').forEach(inp=>{ inp.onclick=e=>e.stopPropagation(); inp.onkeydown=e=>{ if(e.key==='Enter') inp.blur(); }; inp.onchange=()=>saveNote(lines.find(r=>r.Id==inp.dataset.note), inp.value); });
+  t.tBodies[0].querySelectorAll('input[data-note]').forEach(inp=>{ inp.onclick=e=>e.stopPropagation(); inp.onkeydown=e=>{ if(e.key==='Enter') inp.blur(); }; inp.onblur=()=>saveNote(lines.find(r=>r.Id==inp.dataset.note), inp.value); });
 }
 
 /* ───────────────────── changes view ───────────────────── */
@@ -567,7 +575,7 @@ function paintChanges(){
 function paintRuns(){
   const t=$('runsTbl');
   t.tHead.innerHTML='<tr><th>Run</th><th>Status</th><th>Report files</th><th>Tracker saved</th><th>Lines</th><th>Late</th><th>No supply</th><th>Short</th><th>No ETA</th><th>Changes</th><th>Issues</th><th>Secs</th><th>Error</th></tr>';
-  t.tBodies[0].innerHTML=runs.length?runs.map(r=>`<tr><td>${esc(r.Title)}</td><td><span class="ct ${(r.RunStatus||'').startsWith('OK')?'good':'bad'}">${esc(r.RunStatus)}</span></td><td>${esc(r.ReportFile)}${r.ForwarderFile?'<br><span class="dim">'+esc(r.ForwarderFile)+'</span>':''}${r.DrayageFile?'<br><span class="dim">'+esc(r.DrayageFile)+'</span>':''}</td><td>${fd(r.TrackerModified)}</td>`+
+  t.tBodies[0].innerHTML=runs.length?runs.map(r=>`<tr><td>${esc(r.Title)}</td><td><span class="ct ${!(r.RunStatus||'').startsWith('OK')?'bad':/degraded|errors/.test(r.RunStatus)?'warn':'good'}">${esc(r.RunStatus)}</span></td><td>${esc(r.ReportFile)}${r.ForwarderFile?'<br><span class="dim">'+esc(r.ForwarderFile)+'</span>':''}${r.DrayageFile?'<br><span class="dim">'+esc(r.DrayageFile)+'</span>':''}</td><td>${fd(r.TrackerModified)}</td>`+
     `<td class="num">${r.LinesRead??''}</td><td class="num">${r.LateCount??''}</td><td class="num">${r.NoSupplyCount??''}</td><td class="num">${r.ShortCount??''}</td><td class="num">${r.NoETACount??''}</td><td class="num">${r.ChangeCount??''}</td><td class="num">${r.IssueCount??''}</td><td class="num">${r.DurationSec??''}</td><td class="wrap"><div class="errtxt">${esc(r.ErrorText||'')}</div></td></tr>`).join('')
     :'<tr><td colspan="13" class="empty">No runs recorded.</td></tr>';
 }
@@ -606,7 +614,7 @@ function openDrawer(r){
   $('dOrder').innerHTML=kv([['Order',esc(r.OrdNo)],['Customer PO',esc(r.CustPO)],['Start → Cancel',fd(r.StartDate)+' → '+fd(r.CancelDate)],['Ordered / allocated',`${r.QtyOrd??''} / ${r.QtyAlc??''}`+(r.QtyShp?` (shipped ${r.QtyShp})`:'')],['ERP status',esc(r.StatusText)],['Short',r.ShortQty?`<b style="color:var(--short)">${r.ShortQty}</b>`:''],['ERP keyed ETA',r.KeyedETA?(r._disc?`<span class="disc">${fd(r.KeyedETA)} — ${esc((r.ETASource||'').toLowerCase())} says ${fd(r.ETA)}</span>`:fd(r.KeyedETA)):'']]);
   $('dSupply').innerHTML=kv([['Import PO',esc(r.ImportPO)],['Sheet',esc(r.SheetLoc)],['Round',esc(r.RoundNo)],['Container',esc(r.Container)],['Factory',esc(r.Factory)],['Booked qty (style)',r.BookedQty??''],['Ship by',fd(r.ShipBy)],['CRD',fd(r.CRD)],['ETD',fd(r.ETD)],['ETA used',r.ETA?fd(r.ETA)+srcTag(r):''],['First seen',fd(r.FirstSeen)],['Last changed',fd(r.LastChanged)]]);
   $('dShip').innerHTML=kv([['Status',shipTag(r)],['Port ETA',r.ETA?fd(r.ETA)+srcTag(r):''],['In our warehouse',fd(r.WhseDate)],['Last free day',r.LFD?`<span class="${r._lfdSoon?'lfdsoon':''}">${fd(r.LFD)}</span>`:''],['Pickup',fd(r.PickupDate)],['Delivery',fd(r.DeliveryDate)],['Released',esc(r.Released)],['Note',r.ShipNote?`<span class="disc">${esc(r.ShipNote)}</span>`:'']]);
-  $('dNote').value=r.LineNotes||''; $('dNote').onblur=()=>{ saveNote(r,$('dNote').value); paintLines(); };
+  $('dNote').value=r.LineNotes||''; $('dNote').onblur=()=>saveNote(r,$('dNote').value);
   paintSentState(r); paintRevState(r);
   const hist=changes.filter(c=>c.Title===r.Title);
   $('dHist').innerHTML=hist.length?hist.map(c=>`<div><span class="d">${fd(c.RunDate)}</span><span class="ct ${CT_CLASS[c.ChangeType]||''}">${esc(c.ChangeType)}</span> ${c.OldValue?esc(c.OldValue)+' → ':''}${esc(c.NewValue)}${c.Detail?` <span class="dim">(${esc(c.Detail)})</span>`:''}</div>`).join(''):'<div class="dim">No changes logged for this line.</div>';
@@ -651,9 +659,11 @@ async function setSent(r, on){
 }
 async function saveNote(r, text){
   if(!r) return; text=(text||'').trim(); if(text===(r.LineNotes||'')) return;
-  try{ await patchItem(LISTS.lines, r.Id, {LineNotes:text}); r.LineNotes=text; toast('Note saved'); }
-  catch(e){ toast('Could not save note: '+e.message); }
-  if(selected&&selected.Id===r.Id) $('dNote').value=r.LineNotes||'';
+  try{ await patchItem(LISTS.lines, r.Id, {LineNotes:text}); noteSaves[r.Id]={text, at:Date.now()};
+       const cur=lines.find(x=>x.Id===r.Id)||r; cur.LineNotes=text; normLine(cur); if(cur!==r){ r.LineNotes=text; normLine(r); }
+       const ti=document.querySelector(`input[data-note="${r.Id}"]`); if(ti&&ti!==document.activeElement) ti.value=text;   // no full repaint: keeps focus
+       toast('Note saved'); if(selected&&selected.Id===r.Id&&document.activeElement!==$('dNote')) $('dNote').value=text; }
+  catch(e){ toast('Could not save note: '+e.message); }   // the typed text stays where it was
 }
 
 /* ───────────────────── refresh now (kick the Function, wait for its run row) ───────────────────── */
