@@ -83,6 +83,51 @@
   .counter[data-k=notrev] .n{color:var(--accentink)} .counter[data-k=lfd] .n{color:var(--past)}
   .counter[data-k=notrel] .n{color:var(--amb)} .counter[data-k=disagree] .n{color:var(--design)} .counter[data-k=reviewed] .n{color:var(--landed)}
 
+  /* action board */
+  .cards{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:10px}
+  .card{padding:16px 18px 14px; cursor:pointer; border-radius:16px; background:rgba(255,255,255,.55); border:1px solid var(--edge);
+    transition:.13s; user-select:none; text-align:left; font:inherit; color:inherit}
+  .card:hover{background:rgba(255,255,255,.82)}
+  .card.on{background:rgba(255,255,255,.96); box-shadow:0 8px 24px rgba(31,45,75,.14); border-color:rgba(27,111,174,.4)}
+  .card .n{font-size:34px; font-weight:700; letter-spacing:-1px; line-height:1}
+  .card .l{font-size:13px; font-weight:600; margin-top:6px}
+  .card .s{font-size:11.5px; color:var(--muted); margin-top:4px; min-height:15px}
+  .card[data-c=new] .n{color:var(--accentink)} .card[data-c=lfd] .n{color:var(--past)}
+  .card[data-c=rev] .n{color:var(--ink)} .card[data-c=resend] .n{color:var(--design)}
+  .card.zero .n{color:var(--landed)}
+  .strip{font-size:12px; color:var(--muted); margin:2px 4px 14px; display:flex; gap:16px; flex-wrap:wrap; align-items:center}
+  .strip b{color:var(--ink); font-weight:600}
+  .strip .go{margin-left:auto; color:var(--accentink); cursor:pointer; text-decoration:underline; background:none; border:none; font:inherit}
+  .boardbar{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px}
+  .boardbar h3{font-size:15px; font-weight:700; letter-spacing:-.2px}
+  .boardbar .sub{font-size:12px; color:var(--muted)}
+  .boardbar .spacer{flex:1}
+  .boardbar input{min-width:220px}
+  .blist{border:1px solid var(--edge); border-radius:13px; background:rgba(255,255,255,.55); overflow:auto; max-height:calc(100vh - 360px)}
+  .bhead,.brow{display:grid; grid-template-columns:76px minmax(160px,1.25fr) 96px 128px 84px minmax(240px,2.6fr) 22px; gap:12px; align-items:center; padding:9px 14px}
+  .bhead{position:sticky; top:0; z-index:2; background:rgba(240,245,251,.97); font-size:9.5px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.1em; color:var(--muted); border-bottom:1px solid var(--grid)}
+  .brow{border-bottom:1px solid var(--grid); cursor:pointer; font-size:12.5px}
+  .brow:hover{background:rgba(255,255,255,.78)}
+  .brow.sel{background:rgba(47,155,214,.10)}
+  .brow.late{box-shadow:inset 3px 0 0 var(--late)} .brow.tight{box-shadow:inset 3px 0 0 var(--short)}
+  .brow.inactive{color:var(--muted); font-style:italic}
+  .brow .sub{font-size:11px; color:var(--muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .brow .checks{display:flex; flex-direction:column; gap:5px}
+  .brow .wh{font-weight:600; font-variant-numeric:tabular-nums}
+  .brow .wh.bad{color:var(--late)} .brow .wh.warn{color:var(--short)}
+  .brow .why{line-height:1.45}
+  .brow .why .lead{font-weight:600}
+  .brow .why .dot{color:var(--muted)}
+  .brow .nt{color:var(--muted); text-align:center}
+  .cgroup{display:flex; gap:16px; flex-wrap:wrap; align-items:baseline; padding:10px 14px; background:rgba(255,255,255,.75);
+    border-bottom:1px solid var(--grid); font-size:12.5px; position:sticky; top:31px; z-index:1}
+  .cgroup b{font-size:13px} .cgroup .lfdsoon{font-size:13px} .cgroup .dim{color:var(--muted)}
+  .done{padding:46px 20px; text-align:center; color:var(--landed); font-size:14px; font-weight:600}
+  .done span{display:block; font-size:12.5px; color:var(--muted); font-weight:400; margin-top:6px}
+  @media(max-width:980px){ .cards{grid-template-columns:repeat(2,minmax(0,1fr))} .bhead{display:none}
+    .brow{display:flex; flex-wrap:wrap; gap:4px 16px} .brow>div:nth-child(2),.brow .why{flex-basis:100%} .brow .checks{flex-basis:100%; flex-direction:row; gap:14px} .brow .nt{display:none} .cgroup{position:static} }
+
   .tabs{display:flex; gap:4px; margin-bottom:12px}
   .tab{padding:8px 14px; border-radius:11px; font-size:13px; font-weight:600; cursor:pointer; color:var(--muted); border:1px solid transparent}
   .tab:hover{background:var(--glass2); border-color:var(--edge)}
@@ -186,7 +231,7 @@
   <div class="gate-card glass">
     <div class="logo">M1S</div>
     <h2>Late &amp; Short</h2>
-    <p>Customer orders at risk — late arrivals, shortages, and what changed since yesterday. Sign in with your Metro1 Microsoft account.</p>
+    <p>Customer orders at risk — late arrivals, shortages, and what changed since the last report. Sign in with your Metro1 Microsoft account.</p>
     <button class="btn primary" id="loginBtn">Sign in with Microsoft</button>
     <div class="gate-err" id="gateErr"></div>
     <div class="gate-sub">Internal use only</div>
@@ -204,16 +249,30 @@
     </div>
   </header>
 
-  <div class="counters" id="counters"></div>
-
   <div class="tabs">
-    <div class="tab active" data-tab="lines">Lines</div>
+    <div class="tab active" data-tab="board">Action board</div>
+    <div class="tab" data-tab="lines">All lines</div>
     <div class="tab" data-tab="changes">Changes</div>
     <div class="tab" data-tab="runs">Runs</div>
     <div class="tab" data-tab="issues">Tracker issues <span id="issueBadge" class="ct bad hidden"></span></div>
   </div>
 
-  <section class="panel glass" id="linesPanel">
+  <section id="boardPanel">
+    <div class="cards" id="cards"></div>
+    <div class="strip" id="strip"></div>
+    <div class="panel glass">
+      <div class="boardbar">
+        <h3 id="boardTitle"></h3><span class="sub" id="boardSub"></span>
+        <div class="spacer"></div>
+        <input type="search" id="bq" placeholder="Search customer, style, PO, container…">
+        <select id="bCust"><option value="">All customers</option></select>
+      </div>
+      <div class="blist" id="boardList"></div>
+    </div>
+  </section>
+
+  <section class="panel glass hidden" id="linesPanel">
+    <div class="counters" id="counters"></div>
     <div class="filters">
       <div class="f grow"><label class="lbl" for="q">Search</label><input type="search" id="q" placeholder="style, customer PO, import PO, container…"></div>
       <div class="f"><label class="lbl" for="fCust">Customer</label><select id="fCust"><option value="">All</option></select></div>
@@ -375,11 +434,11 @@ async function patchItem(list, id, fields){
 
 /* ───────────────────── data ───────────────────── */
 let lines=[], changes=[], runs=[], selected=null;
-const state={tab:'lines', flags:new Map(), sort:{k:'StartDate',d:1}}; // flags: chip -> 1 include, -1 exclude
+const state={tab:'board', card:null, flags:new Map(), sort:{k:'StartDate',d:1}}; // flags: chip -> 1 include, -1 exclude
 
-const LINE_SEL="Title,Customer,OrdNo,CustPO,Style,QtyOrd,QtyAlc,QtyShp,StatusText,StatusKind,ShortQty,BookedQty,ImportPO,RoundNo,Container,Factory,CRD,ShipBy,ETD,ETA,ETASource,KeyedETA,StartDate,CancelDate,Flags,IsLate,SheetLoc,Landed,FirstSeen,LastChanged,Active,SentToBuyer,SentToBuyerDate,SentToBuyerBy,LineNotes,IsTight,ETAClass,IsFuture,SentETA,SentCRD,SentClass,SentShort,SentStale,ShipStatus,WhseDate,LFD,PickupDate,DeliveryDate,Released,ShipNote,ReviewSig,Reviewed,ReviewedDate,ReviewedBy,ReviewedSig";
-const CHG_SEL="Title,RunDate,ChangeType,ChangedField,OldValue,NewValue,Customer,Style,ImportPO,Detail";
-const RUN_SEL="Title,RunDate,TrackerModified,ReportFile,ForwarderFile,DrayageFile,LinesRead,LateCount,NoSupplyCount,ShortCount,NoETACount,ChangeCount,RunStatus,ErrorText,DurationSec,IssueCount,Issues";
+const LINE_SEL="Title,Customer,OrdNo,CustPO,Style,QtyOrd,QtyAlc,QtyShp,StatusText,StatusKind,ShortQty,BookedQty,ImportPO,RoundNo,Container,Factory,CRD,ShipBy,ETD,ETA,ETASource,KeyedETA,StartDate,CancelDate,Flags,IsLate,SheetLoc,Landed,FirstSeen,LastChanged,Active,SentToBuyer,SentToBuyerDate,SentToBuyerBy,LineNotes,IsTight,ETAClass,IsFuture,SentETA,SentCRD,SentClass,SentShort,SentStale,ShipStatus,WhseDate,LFD,PickupDate,DeliveryDate,Released,ShipNote,ReviewSig,Reviewed,ReviewedDate,ReviewedBy,ReviewedSig,LFDDetail";
+const CHG_SEL="Title,RunDate,RunTitle,ChangeType,ChangedField,OldValue,NewValue,Customer,Style,ImportPO,Detail";
+const RUN_SEL="Title,RunDate,Trigger,Emailed,TrackerModified,ReportFile,ForwarderFile,DrayageFile,LinesRead,LateCount,NoSupplyCount,ShortCount,NoETACount,ChangeCount,RunStatus,ErrorText,DurationSec,IssueCount,Issues";
 
 const noteSaves={};   // Id -> {text, at}: notes saved while a reload was in flight
 async function loadAll(){
@@ -397,7 +456,7 @@ async function loadAll(){
     const a=document.activeElement, nid=a&&a.matches&&a.matches('input[data-note]')?a.dataset.note:null, nv=nid?a.value:'', ns=nid?a.selectionStart:0, nedit=!!nid&&a.value!==a._v0;
     if(selected){ const fresh=lines.find(x=>x.Id===selected.Id), typed=$('dNote').value, dirty=typed.trim()!==(selected.LineNotes||'');
       if(fresh){ openDrawer(fresh); if(dirty) $('dNote').value=typed; } else closeDrawer(); }
-    buildFilterOptions(); paintAsOf(); paintIssueBadge(); if(!hashApplied){ applyHash(); hashApplied=true; } paintCounters(); paint();
+    buildFilterOptions(); buildBoardOptions(); paintAsOf(); paintIssueBadge(); if(!hashApplied){ applyHash(); hashApplied=true; } paintCounters(); paint();
     if(nid){ const inp=document.querySelector(`input[data-note="${nid}"]`); if(inp){ inp.focus(); if(nedit){ inp.value=nv; inp.setSelectionRange(ns,ns); } } }
   }catch(e){ $('asof').innerHTML='<span class="warn">Could not read the lists: '+esc(e.message)+'</span>'; }
 }
@@ -551,9 +610,159 @@ function paintLines(){
   repainting=true; try{ t.tBodies[0].innerHTML=tb; } finally{ repainting=false; }   // Chrome fires blur on the removed inputs
   t.tHead.querySelectorAll('th').forEach(el=>el.onclick=()=>{ const k=el.dataset.k; state.sort=state.sort.k===k?{k,d:-state.sort.d}:{k,d:1}; paintLines(); });
   t.tBodies[0].querySelectorAll('tr.row').forEach(el=>el.onclick=()=>openDrawer(lines.find(r=>r.Id==el.dataset.id)));
-  t.tBodies[0].querySelectorAll('input[data-sent]').forEach(cb=>{ cb.onclick=e=>e.stopPropagation(); cb.onchange=()=>{ const r=lines.find(x=>x.Id==cb.dataset.sent); if(r&&r._stale){ cb.checked=true; setSent(r,true); } else setSent(r, cb.checked); }; });
-  t.tBodies[0].querySelectorAll('input[data-rev]').forEach(cb=>{ cb.onclick=e=>e.stopPropagation(); cb.onchange=()=>setReviewed(lines.find(x=>x.Id==cb.dataset.rev), cb.checked); });
+  wireMarks(t.tBodies[0]);
   t.tBodies[0].querySelectorAll('input[data-note]').forEach(inp=>{ inp.onclick=e=>e.stopPropagation(); inp.onkeydown=e=>{ if(e.key==='Enter') inp.blur(); }; inp.onfocus=()=>inp._v0=inp.value; inp.onblur=()=>{ if(!repainting&&inp.value!==inp._v0) saveNote(lines.find(r=>r.Id==inp.dataset.note), inp.value); }; });
+}
+
+/* ───────────────────── action board ───────────────────── */
+const CARDS=[
+  {k:'new', l:'New since last report'},
+  {k:'lfd', l:'Last free day at risk'},
+  {k:'rev', l:'Not reviewed'},
+  {k:'resend', l:'Re-send to buyer'},
+];
+// change types that are action items (the same ones the email and the Master Report tab list first)
+const NEW_TYPES={NewLate:'New late',ETASlipped:'ETA slipped',NewLFDRisk:'LFD at risk',NewNotReleased:'Arrived, not released',
+  ChangedAfterSent:'Changed since sent',NewTight:'New tight',NewDisagree:'Reports disagree',NewNotInReports:'Not on the reports',
+  ReviewCleared:'Needs another look',LineReturned:'Back on the ERP report'};
+const dayNo=s=>s?Math.round(new Date(d10(s)+'T12:00:00Z').getTime()/864e5):null;
+const todayNo=()=>Math.round(new Date(new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'})+'T12:00:00Z').getTime()/864e5);
+const plural=(n,w)=>`${n} ${w}${n===1?'':'s'}`;
+const ds=s=>s?new Date(s).toLocaleDateString('en-US',{timeZone:'America/New_York',month:'numeric',day:'numeric'}):'';   // 10/24
+const isoShort=t=>String(t||'').replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g,(m,y,mo,d)=>`${+mo}/${+d}`);
+function runWhen(title){ const m=/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(title||''); if(!m) return title||'';
+  const dt=new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00Z`), h=+m[4];
+  return `${dt.toLocaleDateString('en-US',{timeZone:'UTC',weekday:'short'})} ${+m[2]}/${+m[3]}, ${h%12||12}:${m[5]} ${h<12?'AM':'PM'}`; }
+const FLAG_CHANGES=new Set(['NewLFDRisk','NewNotReleased','NewDisagree','NewNotInReports']);
+function changeText(c){
+  const lbl=NEW_TYPES[c.ChangeType]||c.ChangeType, det=(c.Detail||'').replace(/\s*\[run [^\]]*\]$/,'');
+  if(FLAG_CHANGES.has(c.ChangeType)||['ChangedAfterSent','NewLate','NewTight'].includes(c.ChangeType)) return isoShort(`${lbl}: ${det}`);
+  if(c.ChangeType==='ReviewCleared'||c.ChangeType==='LineReturned') return lbl;
+  return isoShort(`${lbl}: ${c.OldValue?c.OldValue+' → ':''}${c.NewValue||''}${det?` (${det})`:''}`);
+}
+function rel(s){ const n=dayNo(s)-todayNo(); return n===0?'today':n===1?'tomorrow':n===-1?'yesterday':n>1&&n<7?`in ${n} days`:n<0?`${-n} days ago`:ds(s); }
+function lfdList(r){   // LFDDetail: "CONT|yyyy-mm-dd|status|yyyy-mm-dd; ..." written by the Function
+  return (r.LFDDetail||'').split(';').map(x=>x.trim()).filter(Boolean).map(x=>{ const [container,lfd,status,pickup]=x.split('|');
+    return {container, lfd:lfd?lfd+'T12:00:00Z':'', status:status||'', pickup:pickup?pickup+'T12:00:00Z':''}; });
+}
+/* One plain sentence of why a line is on the board, most important reason first. */
+function whyParts(r){
+  const p=[], w=dayNo(r.WhseDate), c=dayNo(r.CancelDate);
+  if(r._late&&w!=null&&c!=null) p.push(`In warehouse ${ds(r.WhseDate)}, ${plural(w-c,'day')} after cancel`);
+  else if(r._tight&&w!=null&&c!=null) p.push(`In warehouse ${ds(r.WhseDate)}, ${w>=c?'on the cancel date':plural(c-w,'day')+' before cancel'}`);
+  if(r._flags.includes('LFDRisk')){ const ls=lfdList(r);
+    if(ls.length) ls.forEach(x=>p.push(`${x.container} LFD ${ds(x.lfd)} (${rel(x.lfd)}), ${x.pickup?'pickup '+ds(x.pickup)+(dayNo(x.pickup)>dayNo(x.lfd)?' (after the LFD)':''):'no pickup booked'}`));
+    else if(r.LFD) p.push(`LFD ${ds(r.LFD)} (${rel(r.LFD)}), no pickup booked`); }
+  if(r._flags.includes('NotReleased')) p.push(`${r.Released||'Not released'} at port`);
+  if(r._stale) p.push(`Changed since sent ${ds(r.SentToBuyerDate)}: ETA ${ds(r.SentETA)||'—'} → ${ds(r.ETA)||'—'}`+(r.SentClass&&r.SentClass!==r.ETAClass?`, ${r.SentClass} → ${r.ETAClass||'no ETA'}`:''));
+  if(r._flags.includes('SourcesDisagree')||r._flags.includes('NotInReports')) p.push(r.ShipNote||'Forwarder and drayage disagree');
+  if(r._flags.includes('PONotFound')) p.push(`Import PO ${r.ImportPO} is not on the tracker`);
+  if((r.ShortQty||0)>0) p.push(`${r.ShortQty} short`);
+  if(!p.length) p.push(r.ETA?`ETA ${ds(r.ETA)}${r.ETASource?' from '+r.ETASource.toLowerCase():''}`:'No ETA yet');
+  return p;
+}
+/* Higher = more urgent: late by most days, LFD soonest, at port and not released, tight closest to start, re-send. */
+function urgency(r){
+  const t=todayNo(), w=dayNo(r.WhseDate), c=dayNo(r.CancelDate), st=dayNo(r.StartDate); let u=0;
+  if(r._late) u+=1000+Math.min(90,Math.max(0,(w??c)-c));
+  if(r._flags.includes('LFDRisk')){ const ls=lfdList(r).map(x=>dayNo(x.lfd)).concat(r.LFD?[dayNo(r.LFD)]:[]); u+=800-50*Math.max(0,Math.min(...ls,t+3)-t); }
+  if(r._flags.includes('NotReleased')) u+=600;
+  if(r._tight) u+=400+Math.max(0,60-Math.max(0,(st??t)-t));
+  if(r._stale) u+=300;
+  if(r._flags.includes('SourcesDisagree')||r._flags.includes('NotInReports')) u+=200;
+  if(r._flags.includes('PONotFound')) u+=150;
+  if((r.ShortQty||0)>0) u+=100;
+  return u;
+}
+const byUrgency=(a,b)=>urgency(b)-urgency(a)||(dayNo(a.StartDate)??9e9)-(dayNo(b.StartDate)??9e9)||String(a.Customer).localeCompare(String(b.Customer));
+/* Changes since the report before the latest one: on Monday that is everything since Friday's report. */
+function reportCutoff(){
+  const reps=runs.filter(r=>r.Emailed===true&&(r.Trigger||'timer')==='timer').map(r=>String(r.Title)).sort().reverse();
+  return reps.length>1?reps[1]:null;
+}
+function newByLine(){
+  const cut=reportCutoff(), weekAgo=todayNo()-7, by=new Map();
+  changes.forEach(c=>{ if(!NEW_TYPES[c.ChangeType]) return;
+    if(cut?String(c.RunTitle||'')<=cut:dayNo(c.RunDate)<weekAgo) return;
+    if(!by.has(c.Title)) by.set(c.Title,[]); by.get(c.Title).push(c); });
+  return by;
+}
+function boardData(){
+  const act=lines.filter(r=>r._active), byKey=new Map(lines.map(r=>[r.Title,r]));
+  const nb=newByLine(), newRows=[...nb.keys()].map(k=>byKey.get(k)).filter(Boolean);
+  const conts=new Map();
+  act.filter(r=>r._flags.includes('LFDRisk')).forEach(r=>{
+    const ls=lfdList(r); (ls.length?ls:[{container:r.Container||'—',lfd:r.LFD,status:r.ShipStatus,pickup:''}]).forEach(x=>{
+      if(!conts.has(x.container)) conts.set(x.container,{...x,lines:[]}); conts.get(x.container).lines.push(r); }); });
+  return {nb, newRows:newRows.sort(byUrgency), lfd:[...conts.values()].sort((a,b)=>(dayNo(a.lfd)??9e9)-(dayNo(b.lfd)??9e9)),
+          rev:act.filter(r=>r._needsRev).sort(byUrgency), resend:act.filter(r=>r._stale).sort(byUrgency), act};
+}
+function buildBoardOptions(){
+  const s=$('bCust'), cur=s.value;
+  s.innerHTML='<option value="">All customers</option>'+[...new Set(lines.filter(r=>r._active).map(r=>r.Customer).filter(Boolean))].sort().map(v=>`<option>${esc(v)}</option>`).join('');
+  s.value=cur;
+}
+function boardFilter(r){
+  const q=$('bq').value.trim().toLowerCase(), cu=$('bCust').value;
+  return (!cu||r.Customer===cu)&&(!q||r._hay.includes(q));
+}
+const colOf=k=>COLS.find(c=>c.k===k);
+function boardRow(r, why){
+  const parts=why||whyParts(r), conts=(r.Container||'').split(',').map(x=>x.trim()).filter(Boolean);
+  const w=dayNo(r.WhseDate);
+  return `<div class="brow${r._late?' late':r._tight?' tight':''}${!r._active?' inactive':''}${selected&&selected.Id===r.Id?' sel':''}" data-id="${r.Id}">
+    <div class="checks">${colOf('Reviewed').f(r)}${colOf('SentToBuyer').f(r)}</div>
+    <div><b>${esc(r.Customer)}</b> · ${esc(r.Style)}<div class="sub">PO ${esc(r.CustPO||'—')} · import ${esc(r.ImportPO||'—')}</div></div>
+    <div>${ds(r.StartDate)}–${ds(r.CancelDate)}<div class="sub">${r.ShortQty?`<b style="color:var(--short)">${r.ShortQty} short</b>`:esc(r.OrdNo||'')}</div></div>
+    <div>${shipTag(r)}<div class="sub" title="${esc(conts.join(', '))}">${esc(conts[0]||'')}${conts.length>1?` +${conts.length-1}`:''}</div></div>
+    <div class="wh ${r._late?'bad':r._tight?'warn':''}">${w!=null?ds(r.WhseDate):'–'}<div class="sub">${r.ETA?'ETA '+ds(r.ETA):'no ETA'}</div></div>
+    <div class="why">${parts.map((t,i)=>`<span class="${i===0?'lead':''}">${esc(t)}</span>`).join('<span class="dot"> · </span>')}</div>
+    <div class="nt" title="${esc(r.LineNotes||'')}">${r.LineNotes?'✎':''}</div></div>`;
+}
+const BHEAD='<div class="bhead"><div>Rev · Sent</div><div>Customer · Style</div><div>Window</div><div>Container</div><div>In whse</div><div>Why it is here</div><div></div></div>';
+function paintBoard(){
+  const D=boardData();
+  const cnt={new:D.newRows.length, lfd:D.lfd.length, rev:D.rev.length, resend:D.resend.length};
+  if(!state.card||!CARDS.some(c=>c.k===state.card)) state.card=(CARDS.find(c=>cnt[c.k]>0)||CARDS[2]).k;
+  const cut=reportCutoff();
+  const subs={
+    new: cut?`since ${runWhen(cut)}`:'last 7 days',
+    lfd: D.lfd.length?`next: ${rel(D.lfd[0].lfd)} (${ds(D.lfd[0].lfd)})`:'nothing at port near its LFD',
+    rev: `${D.rev.filter(r=>r._late).length} late · ${D.rev.filter(r=>r._tight).length} tight`,
+    resend: D.resend.length?`oldest sent ${ds(D.resend.map(r=>r.SentToBuyerDate).filter(Boolean).sort()[0])}`:'buyers are up to date',
+  };
+  $('cards').innerHTML=CARDS.map(c=>`<button class="card${state.card===c.k?' on':''}${cnt[c.k]===0?' zero':''}" data-c="${c.k}">
+    <div class="n">${cnt[c.k]===0?'✓':cnt[c.k]}</div><div class="l">${c.l}</div><div class="s">${esc(subs[c.k])}</div></button>`).join('');
+  $('cards').querySelectorAll('.card').forEach(el=>el.onclick=()=>{ state.card=el.dataset.c; paintBoard(); syncHash(); });
+  const a=D.act;
+  $('strip').innerHTML=`<span><b>${a.filter(r=>r._late).length}</b> late</span><span><b>${a.filter(r=>r._tight).length}</b> tight</span>`+
+    `<span><b>${a.filter(r=>(r.ShortQty||0)>0).length}</b> short</span><span><b>${a.filter(r=>r._rev).length}</b> reviewed</span>`+
+    `<span><b>${a.length}</b> open lines</span><button class="go" id="toLines">See all lines →</button>`;
+  $('toLines').onclick=()=>setTab('lines');
+  const card=CARDS.find(c=>c.k===state.card);
+  $('boardTitle').textContent=card.l; $('boardSub').textContent=subs[card.k];
+  let html='', shown=0;
+  if(state.card==='lfd'){
+    D.lfd.forEach(g=>{ const ls=g.lines.filter(boardFilter); if(!ls.length) return; shown+=ls.length;
+      html+=`<div class="cgroup"><b>${esc(g.container)}</b><span class="lfdsoon">LFD ${rel(g.lfd)} · ${ds(g.lfd)}</span>`+
+        `<span>${esc(g.status||'')}</span><span>${g.pickup?(dayNo(g.pickup)>dayNo(g.lfd)?'<b style="color:var(--past)">pickup '+ds(g.pickup)+', after the LFD</b>':'pickup '+ds(g.pickup)):'<b style="color:var(--past)">no pickup booked</b>'}</span>`+
+        `<span class="dim">${plural(g.lines.length,'line')}</span></div>`+ls.map(r=>boardRow(r)).join(''); });
+  }else{
+    const rows=(state.card==='new'?D.newRows:state.card==='rev'?D.rev:D.resend).filter(boardFilter); shown=rows.length;
+    html=rows.map(r=>{ if(state.card!=='new') return boardRow(r);
+      const cs=D.nb.get(r.Title)||[];
+      const what=[...new Map(cs.map(c=>[c.ChangeType,c])).values()].map(changeText);
+      return boardRow(r, what); }).join('');
+  }
+  $('boardList').innerHTML=shown?BHEAD+html:`<div class="done">${cnt[state.card]?'Nothing matches the search.':'All clear ✓'}<span>${cnt[state.card]?'Clear the search or customer filter.':({new:'No new problems since the last report.',lfd:'No container at port is close to its last free day without a pickup.',rev:'Every late, tight or flagged line has been reviewed.',resend:'Nothing has changed since it was sent to a buyer.'})[state.card]}</span></div>`;
+  wireMarks($('boardList'));
+  $('boardList').querySelectorAll('.brow').forEach(el=>el.onclick=()=>openDrawer(lines.find(r=>r.Id==el.dataset.id)));
+}
+/* checkbox wiring shared by the board and the All lines table */
+function wireMarks(root){
+  root.querySelectorAll('input[data-sent]').forEach(cb=>{ cb.onclick=e=>e.stopPropagation(); cb.onchange=()=>{ const r=lines.find(x=>x.Id==cb.dataset.sent); if(r&&r._stale){ cb.checked=true; setSent(r,true); } else setSent(r, cb.checked); }; });
+  root.querySelectorAll('input[data-rev]').forEach(cb=>{ cb.onclick=e=>e.stopPropagation(); cb.onchange=()=>setReviewed(lines.find(x=>x.Id==cb.dataset.rev), cb.checked); });
+  root.querySelectorAll('label.sent,label.rev').forEach(l=>l.addEventListener('click',e=>e.stopPropagation()));
 }
 
 /* ───────────────────── changes view ───────────────────── */
@@ -622,9 +831,9 @@ function openDrawer(r){
   const hist=changes.filter(c=>c.Title===r.Title);
   $('dHist').innerHTML=hist.length?hist.map(c=>`<div><span class="d">${fd(c.RunDate)}</span><span class="ct ${CT_CLASS[c.ChangeType]||''}">${esc(c.ChangeType)}</span> ${c.OldValue?esc(c.OldValue)+' → ':''}${esc(c.NewValue)}${c.Detail?` <span class="dim">(${esc(c.Detail)})</span>`:''}</div>`).join(''):'<div class="dim">No changes logged for this line.</div>';
   $('drawer').classList.add('open'); $('drawer').setAttribute('aria-hidden','false');
-  paintLines();
+  paint();
 }
-function closeDrawer(){ $('drawer').classList.remove('open'); $('drawer').setAttribute('aria-hidden','true'); selected=null; paintLines(); }
+function closeDrawer(){ $('drawer').classList.remove('open'); $('drawer').setAttribute('aria-hidden','true'); selected=null; paint(); }
 $('dClose').onclick=closeDrawer;
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&$('drawer').classList.contains('open')) closeDrawer(); });
 
@@ -645,7 +854,7 @@ async function setReviewed(r, on){
   const fields=on?{Reviewed:true, ReviewedDate:today+'T12:00:00Z', ReviewedBy:$('whoName').textContent, ReviewedSig:r.ReviewSig||''}:{Reviewed:false, ReviewedDate:null, ReviewedBy:'', ReviewedSig:''};
   try{ await patchItem(LISTS.lines, r.Id, fields); Object.assign(r, fields); normLine(r); toast(on?'Marked reviewed':'Reviewed cleared'); }
   catch(e){ toast('Could not save: '+e.message); }
-  paintCounters(); paintLines(); if(selected&&selected.Id===r.Id){ paintRevState(r); $('dFlags').innerHTML=flagPills(r); }
+  paintCounters(); paint(); if(selected&&selected.Id===r.Id){ paintRevState(r); $('dFlags').innerHTML=flagPills(r); }
 }
 async function setSent(r, on){
   if(r) r=lines.find(x=>x.Id===r.Id)||r;
@@ -658,7 +867,7 @@ async function setSent(r, on){
        r._flags=r._flags.filter(f=>f!=='ChangedSinceSent'); r.Flags=r._flags.join(', ');
        toast(on?(wasStale?'Marked re-sent to buyer':'Marked sent to buyer'):'Sent-to-buyer cleared'); }
   catch(e){ toast('Could not save: '+e.message); }
-  paintCounters(); paintLines(); if(selected&&selected.Id===r.Id){ paintSentState(r); $('dFlags').innerHTML=flagPills(r); }
+  paintCounters(); paint(); if(selected&&selected.Id===r.Id){ paintSentState(r); $('dFlags').innerHTML=flagPills(r); }
 }
 async function saveNote(r, text){
   if(!r) return; text=(text||'').trim(); if(text===(r.LineNotes||'')) return;
@@ -725,7 +934,8 @@ function syncHash(){
   if(applying) return;
   const p=new URLSearchParams();
   const f=[...state.flags].map(([k,m])=>(m===-1?'-':'')+k).join(','); if(f) p.set('f',f);
-  if(state.tab!=='lines') p.set('tab',state.tab);
+  if(state.tab!=='board') p.set('tab',state.tab);
+  if(state.tab==='board'&&state.card) p.set('card',state.card);
   [['q','q'],['cust','fCust'],['fact','fFact'],['round','fRound'],['src','fSrc'],['ship','fShip']].forEach(([n,id])=>{ if($(id).value) p.set(n,$(id).value); });
   if($('showGone').checked) p.set('gone','1');
   const h=p.toString(); history.replaceState(null,'',location.pathname+(h?'#'+h:''));
@@ -738,18 +948,21 @@ function applyHash(){
     state.flags.clear(); (p.get('f')||'').split(',').filter(Boolean).forEach(t=>{ const ex=t.startsWith('-'), k=ex?t.slice(1):t; if(COUNTERS.some(c=>c[0]===k)) state.flags.set(k,ex?-1:1); });
     [['q','q'],['cust','fCust'],['fact','fFact'],['round','fRound'],['src','fSrc'],['ship','fShip']].forEach(([n,id])=>{ if(p.has(n)) $(id).value=p.get(n); });
     $('showGone').checked=p.get('gone')==='1';
-    const t=p.get('tab'); if(t&&['lines','changes','runs','issues'].includes(t)){ state.tab=t; document.querySelectorAll('.tab').forEach(el=>el.classList.toggle('active',el.dataset.tab===t)); ['lines','changes','runs','issues'].forEach(n=>$(n+'Panel').classList.toggle('hidden',t!==n)); }
+    const t=p.get('tab'); if(t&&TABS.includes(t)){ state.tab=t; document.querySelectorAll('.tab').forEach(el=>el.classList.toggle('active',el.dataset.tab===t)); TABS.forEach(n=>$(n+'Panel').classList.toggle('hidden',t!==n)); }
+    if(CARDS.some(c=>c.k===p.get('card'))) state.card=p.get('card');
   }finally{ applying=false; }
 }
 $('copyLink').onclick=()=>{ syncHash(); navigator.clipboard.writeText(location.href).then(()=>toast('Link copied — opens with these filters'),()=>toast(location.href)); };
 
 /* ───────────────────── tabs + filters ───────────────────── */
+const TABS=['board','lines','changes','runs','issues'];
 function setTab(t){ state.tab=t; document.querySelectorAll('.tab').forEach(el=>el.classList.toggle('active',el.dataset.tab===t));
-  ['lines','changes','runs','issues'].forEach(n=>$(n+'Panel').classList.toggle('hidden',t!==n)); paint(); syncHash(); }
+  TABS.forEach(n=>$(n+'Panel').classList.toggle('hidden',t!==n)); paint(); syncHash(); }
 document.querySelectorAll('.tab').forEach(el=>el.onclick=()=>setTab(el.dataset.tab));
-function paint(){ if(state.tab==='lines') paintLines(); else if(state.tab==='changes') paintChanges(); else if(state.tab==='issues') paintIssues(); else paintRuns(); }
+function paint(){ if(state.tab==='board') paintBoard(); else if(state.tab==='lines') paintLines(); else if(state.tab==='changes') paintChanges(); else if(state.tab==='issues') paintIssues(); else paintRuns(); }
 ['q','fCust','fFact','fRound','fSrc','fShip','showGone'].forEach(id=>$(id).addEventListener('input',()=>{ paintLines(); syncHash(); }));
 ['cType','cq'].forEach(id=>$(id).addEventListener('input',paintChanges));
+['bq','bCust'].forEach(id=>$(id).addEventListener('input',paintBoard));
 $('clearF').onclick=()=>{ ['q','fCust','fFact','fRound','fSrc','fShip'].forEach(id=>$(id).value=''); $('showGone').checked=false; state.flags.clear(); paintCounters(); paintLines(); syncHash(); };
 
 initAuth();
