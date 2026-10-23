@@ -103,7 +103,9 @@
   .boardbar .sub{font-size:12px; color:var(--muted)}
   .boardbar .spacer{flex:1}
   .boardbar input{min-width:220px}
-  .blist{border:1px solid var(--edge); border-radius:13px; background:rgba(255,255,255,.55); overflow:auto; max-height:calc(100vh - 360px)}
+  .blist{border:1px solid var(--edge); border-radius:13px; background:rgba(255,255,255,.55); overflow:auto; max-height:max(340px,calc(100vh - 360px))}
+  .brow .cl{display:none}
+  .card:focus-visible,.brow:focus-visible{outline:2px solid var(--accentink); outline-offset:-2px}
   .bhead,.brow{display:grid; grid-template-columns:76px minmax(160px,1.25fr) 96px 128px 84px minmax(240px,2.6fr) 22px; gap:12px; align-items:center; padding:9px 14px}
   .bhead{position:sticky; top:0; z-index:2; background:rgba(240,245,251,.97); font-size:9.5px; font-weight:700; text-transform:uppercase;
     letter-spacing:.1em; color:var(--muted); border-bottom:1px solid var(--grid)}
@@ -125,7 +127,8 @@
   .cgroup b{font-size:13px} .cgroup .lfdsoon{font-size:13px} .cgroup .dim{color:var(--muted)}
   .done{padding:46px 20px; text-align:center; color:var(--landed); font-size:14px; font-weight:600}
   .done span{display:block; font-size:12.5px; color:var(--muted); font-weight:400; margin-top:6px}
-  @media(max-width:980px){ .cards{grid-template-columns:repeat(2,minmax(0,1fr))} .bhead{display:none}
+  @media(max-width:1040px){ .cards{grid-template-columns:repeat(2,minmax(0,1fr))} .bhead{display:none} .blist{max-height:none}
+    .brow .cl{display:inline; font-size:10.5px; color:var(--muted); font-weight:500} .brow .ck{display:flex; align-items:center; gap:6px}
     .brow{display:flex; flex-wrap:wrap; gap:4px 16px} .brow>div:nth-child(2),.brow .why{flex-basis:100%} .brow .checks{flex-basis:100%; flex-direction:row; gap:14px} .brow .nt{display:none} .cgroup{position:static} }
 
   .tabs{display:flex; gap:4px; margin-bottom:12px}
@@ -264,8 +267,8 @@
       <div class="boardbar">
         <h3 id="boardTitle"></h3><span class="sub" id="boardSub"></span>
         <div class="spacer"></div>
-        <input type="search" id="bq" placeholder="Search customer, style, PO, container…">
-        <select id="bCust"><option value="">All customers</option></select>
+        <input type="search" id="bq" placeholder="Search customer, style, PO, container…" aria-label="Search the board">
+        <select id="bCust" aria-label="Customer"><option value="">All customers</option></select>
       </div>
       <div class="blist" id="boardList"></div>
     </div>
@@ -438,7 +441,7 @@ const state={tab:'board', card:null, flags:new Map(), sort:{k:'StartDate',d:1}};
 
 const LINE_SEL="Title,Customer,OrdNo,CustPO,Style,QtyOrd,QtyAlc,QtyShp,StatusText,StatusKind,ShortQty,BookedQty,ImportPO,RoundNo,Container,Factory,CRD,ShipBy,ETD,ETA,ETASource,KeyedETA,StartDate,CancelDate,Flags,IsLate,SheetLoc,Landed,FirstSeen,LastChanged,Active,SentToBuyer,SentToBuyerDate,SentToBuyerBy,LineNotes,IsTight,ETAClass,IsFuture,SentETA,SentCRD,SentClass,SentShort,SentStale,ShipStatus,WhseDate,LFD,PickupDate,DeliveryDate,Released,ShipNote,ReviewSig,Reviewed,ReviewedDate,ReviewedBy,ReviewedSig,LFDDetail";
 const CHG_SEL="Title,RunDate,RunTitle,ChangeType,ChangedField,OldValue,NewValue,Customer,Style,ImportPO,Detail";
-const RUN_SEL="Title,RunDate,Trigger,Emailed,TrackerModified,ReportFile,ForwarderFile,DrayageFile,LinesRead,LateCount,NoSupplyCount,ShortCount,NoETACount,ChangeCount,RunStatus,ErrorText,DurationSec,IssueCount,Issues";
+const RUN_SEL="Title,RunDate,Trigger,Emailed,Reported,TrackerModified,ReportFile,ForwarderFile,DrayageFile,LinesRead,LateCount,NoSupplyCount,ShortCount,NoETACount,ChangeCount,RunStatus,ErrorText,DurationSec,IssueCount,Issues";
 
 const noteSaves={};   // Id -> {text, at}: notes saved while a reload was in flight
 async function loadAll(){
@@ -451,6 +454,7 @@ async function loadAll(){
       listAll(LISTS.changes, CHG_SEL, `fields/RunDate ge '${since}'`),
       listAll(LISTS.runs, RUN_SEL),
     ]);
+    boardKeep.clear();
     lines=L.map(normLine); changes=C.sort((a,b)=>b.Id-a.Id); runs=R.sort((a,b)=>b.Id-a.Id).slice(0,60);
     lines.forEach(x=>{ const n=noteSaves[x.Id]; if(n&&n.at>=t0){ x.LineNotes=n.text; normLine(x); } });
     const a=document.activeElement, nid=a&&a.matches&&a.matches('input[data-note]')?a.dataset.note:null, nv=nid?a.value:'', ns=nid?a.selectionStart:0, nedit=!!nid&&a.value!==a._v0;
@@ -493,7 +497,8 @@ function paintAsOf(){
   if(!ok) html+=` · <span class="warn">last run ${esc(last.RunStatus||'failed')} — see Runs</span>`;
   else{
     if(/degraded/.test(last.RunStatus)) html+=` · <span class="warn">a forwarder or drayage report was not read — see Tracker issues</span>`;
-    if(ageH>STALE_HOURS) html+=` · <span class="warn">no run in ${Math.round(ageH)} h</span>`;
+    let wk=0; for(let t=new Date(last.RunDate).getTime()+864e5; t<=Date.now(); t+=864e5){ const g=new Date(t).getUTCDay(); if(g===0||g===6) wk++; }
+    if(ageH-24*wk>STALE_HOURS) html+=` · <span class="warn">no run in ${Math.round(ageH)} h</span>`;   // runs are weekdays only
   }
   $('asof').innerHTML=html;
 }
@@ -621,11 +626,13 @@ const CARDS=[
   {k:'rev', l:'Not reviewed'},
   {k:'resend', l:'Re-send to buyer'},
 ];
-// change types that are action items (the same ones the email and the Master Report tab list first)
-const NEW_TYPES={NewLate:'New late',ETASlipped:'ETA slipped',NewLFDRisk:'LFD at risk',NewNotReleased:'Arrived, not released',
-  ChangedAfterSent:'Changed since sent',NewTight:'New tight',NewDisagree:'Reports disagree',NewNotInReports:'Not on the reports',
+// change types that are action items, in the order the email and the Master Report tab list them
+const NEW_TYPES={NewLate:'New late',NewTight:'New tight',ETASlipped:'ETA slipped',NewLFDRisk:'LFD at risk',NewNotReleased:'Arrived, not released',
+  NewDisagree:'Reports disagree',NewNotInReports:'Not on the reports',ChangedAfterSent:'Changed since sent',
   ReviewCleared:'Needs another look',LineReturned:'Back on the ERP report'};
-const dayNo=s=>s?Math.round(new Date(d10(s)+'T12:00:00Z').getTime()/864e5):null;
+const NEW_ORDER=Object.keys(NEW_TYPES);
+const ISO=/^\d{4}-\d{2}-\d{2}$/;
+const dayNo=s=>{ if(!s) return null; const n=Math.round(new Date(d10(s)+'T12:00:00Z').getTime()/864e5); return isNaN(n)?null:n; };
 const todayNo=()=>Math.round(new Date(new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'})+'T12:00:00Z').getTime()/864e5);
 const plural=(n,w)=>`${n} ${w}${n===1?'':'s'}`;
 const ds=s=>s?new Date(s).toLocaleDateString('en-US',{timeZone:'America/New_York',month:'numeric',day:'numeric'}):'';   // 10/24
@@ -633,39 +640,64 @@ const isoShort=t=>String(t||'').replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g,(m,y,mo,d
 function runWhen(title){ const m=/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(title||''); if(!m) return title||'';
   const dt=new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00Z`), h=+m[4];
   return `${dt.toLocaleDateString('en-US',{timeZone:'UTC',weekday:'short'})} ${+m[2]}/${+m[3]}, ${h%12||12}:${m[5]} ${h<12?'AM':'PM'}`; }
-const FLAG_CHANGES=new Set(['NewLFDRisk','NewNotReleased','NewDisagree','NewNotInReports']);
+const FLAG_CHANGES={NewLFDRisk:'LFDRisk',NewNotReleased:'NotReleased',NewDisagree:'SourcesDisagree',NewNotInReports:'NotInReports'};
 function changeText(c){
   const lbl=NEW_TYPES[c.ChangeType]||c.ChangeType, det=(c.Detail||'').replace(/\s*\[run [^\]]*\]$/,'');
-  if(FLAG_CHANGES.has(c.ChangeType)||['ChangedAfterSent','NewLate','NewTight'].includes(c.ChangeType)) return isoShort(`${lbl}: ${det}`);
+  if(FLAG_CHANGES[c.ChangeType]||['ChangedAfterSent','NewLate','NewTight'].includes(c.ChangeType)) return isoShort(`${lbl}: ${det}`);
   if(c.ChangeType==='ReviewCleared'||c.ChangeType==='LineReturned') return lbl;
+  if(c.ChangeType==='ETASlipped') return isoShort(`${lbl}: ${c.OldValue?c.OldValue+' → ':''}${c.NewValue||''}`);
   return isoShort(`${lbl}: ${c.OldValue?c.OldValue+' → ':''}${c.NewValue||''}${det?` (${det})`:''}`);
 }
-function rel(s){ const n=dayNo(s)-todayNo(); return n===0?'today':n===1?'tomorrow':n===-1?'yesterday':n>1&&n<7?`in ${n} days`:n<0?`${-n} days ago`:ds(s); }
-function lfdList(r){   // LFDDetail: "CONT|yyyy-mm-dd|status|yyyy-mm-dd; ..." written by the Function
-  return (r.LFDDetail||'').split(';').map(x=>x.trim()).filter(Boolean).map(x=>{ const [container,lfd,status,pickup]=x.split('|');
-    return {container, lfd:lfd?lfd+'T12:00:00Z':'', status:status||'', pickup:pickup?pickup+'T12:00:00Z':''}; });
+/* a logged change still belongs on the board only while it is still true of the line */
+function stillApplies(c, r){
+  if(!r._active) return false;
+  if(FLAG_CHANGES[c.ChangeType]) return r._flags.includes(FLAG_CHANGES[c.ChangeType]);
+  switch(c.ChangeType){
+    case 'ReviewCleared': return r._needsRev;
+    case 'ChangedAfterSent': return r._stale;
+    case 'NewLate': return r._late;
+    case 'NewTight': return r._tight||r._late;
+    case 'ETASlipped': return ISO.test(c.OldValue||'')&&r.ETA&&dayNo(r.ETA)>dayNo(c.OldValue+'T12:00:00Z');
+    default: return true;
+  }
+}
+function rel(s){ const d=dayNo(s); if(d==null) return ''; const n=d-todayNo();
+  return n===0?'today':n===1?'tomorrow':n===-1?'yesterday':n>1&&n<7?`in ${n} days`:n<0?`${-n} days ago`:ds(s); }
+function pickupText(pk, lfd){ return pk?'pickup '+ds(pk)+(dayNo(pk)>dayNo(lfd)?' (after the LFD)':''):'no pickup booked'; }
+function lfdList(r){   // LFDDetail: "CONT|yyyy-mm-dd|status|yyyy-mm-dd; ..." written by the Function; bad entries are skipped
+  return (r.LFDDetail||'').split(';').map(x=>x.trim()).filter(Boolean).map(x=>x.split('|'))
+    .filter(p=>p.length===4&&p[0]&&ISO.test(p[1]))
+    .map(([container,lfd,status,pickup])=>({container, lfd:lfd+'T12:00:00Z', status:status||'', pickup:ISO.test(pickup)?pickup+'T12:00:00Z':''}));
+}
+function lfdOf(r){ const ls=lfdList(r); return ls.length?ls:(r.LFD?[{container:(r.Container||'—'), lfd:r.LFD, status:r.ShipStatus||'', pickup:r.PickupDate||''}]:[]); }
+/* what changed since the line was sent to the buyer: only the fields that actually moved */
+function sentDiff(r){
+  const d=[];
+  if(d10(r.SentETA)!==d10(r.ETA)) d.push(`ETA ${ds(r.SentETA)||'none'} → ${ds(r.ETA)||'none'}`);
+  if((r.SentClass||'')!==(r.ETAClass||'')) d.push(`${r.SentClass||'no class'} → ${r.ETAClass||'no ETA'}`);
+  if(d10(r.SentCRD)!==d10(r.CRD)) d.push(`CRD ${ds(r.SentCRD)||'none'} → ${ds(r.CRD)||'none'}`);
+  if((r.SentShort||0)!==(r.ShortQty||0)) d.push(`short ${r.SentShort||0} → ${r.ShortQty||0}`);
+  return `Changed since sent ${ds(r.SentToBuyerDate)}`+(d.length?': '+d.join(', '):'');
 }
 /* One plain sentence of why a line is on the board, most important reason first. */
 function whyParts(r){
-  const p=[], w=dayNo(r.WhseDate), c=dayNo(r.CancelDate);
-  if(r._late&&w!=null&&c!=null) p.push(`In warehouse ${ds(r.WhseDate)}, ${plural(w-c,'day')} after cancel`);
-  else if(r._tight&&w!=null&&c!=null) p.push(`In warehouse ${ds(r.WhseDate)}, ${w>=c?'on the cancel date':plural(c-w,'day')+' before cancel'}`);
-  if(r._flags.includes('LFDRisk')){ const ls=lfdList(r);
-    if(ls.length) ls.forEach(x=>p.push(`${x.container} LFD ${ds(x.lfd)} (${rel(x.lfd)}), ${x.pickup?'pickup '+ds(x.pickup)+(dayNo(x.pickup)>dayNo(x.lfd)?' (after the LFD)':''):'no pickup booked'}`));
-    else if(r.LFD) p.push(`LFD ${ds(r.LFD)} (${rel(r.LFD)}), no pickup booked`); }
+  const p=[], w=dayNo(r.WhseDate), c=dayNo(r.CancelDate), erp=r.ETASource==='ERP'?' (ERP-keyed ETA only)':'';
+  if(r._late&&w!=null&&c!=null) p.push(`In warehouse ${ds(r.WhseDate)}, ${plural(w-c,'day')} after cancel${erp}`);
+  else if(r._tight&&w!=null&&c!=null) p.push(`In warehouse ${ds(r.WhseDate)}, ${w>=c?'on the cancel date':plural(c-w,'day')+' before cancel'}${erp}`);
+  if(r._flags.includes('LFDRisk')) lfdOf(r).forEach(x=>p.push(`${x.container} LFD ${ds(x.lfd)} (${rel(x.lfd)}), ${pickupText(x.pickup,x.lfd)}`));
   if(r._flags.includes('NotReleased')) p.push(`${r.Released||'Not released'} at port`);
-  if(r._stale) p.push(`Changed since sent ${ds(r.SentToBuyerDate)}: ETA ${ds(r.SentETA)||'—'} → ${ds(r.ETA)||'—'}`+(r.SentClass&&r.SentClass!==r.ETAClass?`, ${r.SentClass} → ${r.ETAClass||'no ETA'}`:''));
+  if(r._stale) p.push(sentDiff(r));
   if(r._flags.includes('SourcesDisagree')||r._flags.includes('NotInReports')) p.push(r.ShipNote||'Forwarder and drayage disagree');
   if(r._flags.includes('PONotFound')) p.push(`Import PO ${r.ImportPO} is not on the tracker`);
   if((r.ShortQty||0)>0) p.push(`${r.ShortQty} short`);
   if(!p.length) p.push(r.ETA?`ETA ${ds(r.ETA)}${r.ETASource?' from '+r.ETASource.toLowerCase():''}`:'No ETA yet');
   return p;
 }
-/* Higher = more urgent: late by most days, LFD soonest, at port and not released, tight closest to start, re-send. */
+/* Higher = more urgent: LFD soonest, late by most days, at port and not released, tight closest to start, re-send. */
 function urgency(r){
   const t=todayNo(), w=dayNo(r.WhseDate), c=dayNo(r.CancelDate), st=dayNo(r.StartDate); let u=0;
-  if(r._late) u+=1000+Math.min(90,Math.max(0,(w??c)-c));
-  if(r._flags.includes('LFDRisk')){ const ls=lfdList(r).map(x=>dayNo(x.lfd)).concat(r.LFD?[dayNo(r.LFD)]:[]); u+=800-50*Math.max(0,Math.min(...ls,t+3)-t); }
+  if(r._late) u+=1000+Math.min(90,Math.max(0,(w??c??0)-(c??0)));
+  if(r._flags.includes('LFDRisk')){ const ls=lfdOf(r).map(x=>dayNo(x.lfd)).filter(x=>x!=null); if(ls.length) u+=800-50*Math.min(3,Math.max(0,Math.min(...ls)-t)); }
   if(r._flags.includes('NotReleased')) u+=600;
   if(r._tight) u+=400+Math.max(0,60-Math.max(0,(st??t)-t));
   if(r._stale) u+=300;
@@ -675,27 +707,35 @@ function urgency(r){
   return u;
 }
 const byUrgency=(a,b)=>urgency(b)-urgency(a)||(dayNo(a.StartDate)??9e9)-(dayNo(b.StartDate)??9e9)||String(a.Customer).localeCompare(String(b.Customer));
-/* Changes since the report before the latest one: on Monday that is everything since Friday's report. */
+/* Changes since the report before the latest one: on Monday that is everything since Friday's report.
+   Reported = the run sent its own email / digest (runs it rolled up only get Emailed). */
 function reportCutoff(){
-  const reps=runs.filter(r=>r.Emailed===true&&(r.Trigger||'timer')==='timer').map(r=>String(r.Title)).sort().reverse();
+  const isRep=r=>r.Reported===true||(r.Reported==null&&r.Emailed===true&&(r.Trigger||'timer')==='timer');
+  const reps=runs.filter(isRep).map(r=>String(r.Title)).sort().reverse();
   return reps.length>1?reps[1]:null;
 }
 function newByLine(){
-  const cut=reportCutoff(), weekAgo=todayNo()-7, by=new Map();
-  changes.forEach(c=>{ if(!NEW_TYPES[c.ChangeType]) return;
-    if(cut?String(c.RunTitle||'')<=cut:dayNo(c.RunDate)<weekAgo) return;
-    if(!by.has(c.Title)) by.set(c.Title,[]); by.get(c.Title).push(c); });
+  const cut=reportCutoff(), weekAgo=todayNo()-7, byKey=new Map(lines.map(r=>[r.Title,r])), by=new Map();
+  changes.forEach(c=>{ if(!NEW_TYPES[c.ChangeType]) return;                      // changes are newest first
+    if(cut?String(c.RunTitle||'')<=cut:(dayNo(c.RunDate)??0)<weekAgo) return;
+    const r=byKey.get(c.Title); if(!r||!stillApplies(c,r)) return;
+    if(!by.has(c.Title)) by.set(c.Title,new Map());
+    const m=by.get(c.Title), seen=m.get(c.ChangeType);
+    if(!seen) m.set(c.ChangeType,{...c});                                          // keep the newest of each type
+    else if(c.ChangeType==='ETASlipped') seen.OldValue=c.OldValue;                 // ...but slip from the oldest "from" date
+  });
   return by;
 }
+const boardKeep=new Set();   // lines ticked on the board stay in place until the card changes or the data reloads
 function boardData(){
   const act=lines.filter(r=>r._active), byKey=new Map(lines.map(r=>[r.Title,r]));
   const nb=newByLine(), newRows=[...nb.keys()].map(k=>byKey.get(k)).filter(Boolean);
   const conts=new Map();
-  act.filter(r=>r._flags.includes('LFDRisk')).forEach(r=>{
-    const ls=lfdList(r); (ls.length?ls:[{container:r.Container||'—',lfd:r.LFD,status:r.ShipStatus,pickup:''}]).forEach(x=>{
-      if(!conts.has(x.container)) conts.set(x.container,{...x,lines:[]}); conts.get(x.container).lines.push(r); }); });
+  act.filter(r=>r._flags.includes('LFDRisk')).forEach(r=>lfdOf(r).forEach(x=>{
+    if(!conts.has(x.container)) conts.set(x.container,{...x,lines:[]}); conts.get(x.container).lines.push(r); }));
   return {nb, newRows:newRows.sort(byUrgency), lfd:[...conts.values()].sort((a,b)=>(dayNo(a.lfd)??9e9)-(dayNo(b.lfd)??9e9)),
-          rev:act.filter(r=>r._needsRev).sort(byUrgency), resend:act.filter(r=>r._stale).sort(byUrgency), act};
+          rev:act.filter(r=>r._needsRev||boardKeep.has(r.Id)).sort(byUrgency),
+          resend:act.filter(r=>r._stale||boardKeep.has(r.Id)).sort(byUrgency), act};
 }
 function buildBoardOptions(){
   const s=$('bCust'), cur=s.value;
@@ -710,58 +750,63 @@ const colOf=k=>COLS.find(c=>c.k===k);
 function boardRow(r, why){
   const parts=why||whyParts(r), conts=(r.Container||'').split(',').map(x=>x.trim()).filter(Boolean);
   const w=dayNo(r.WhseDate);
-  return `<div class="brow${r._late?' late':r._tight?' tight':''}${!r._active?' inactive':''}${selected&&selected.Id===r.Id?' sel':''}" data-id="${r.Id}">
-    <div class="checks">${colOf('Reviewed').f(r)}${colOf('SentToBuyer').f(r)}</div>
+  return `<div class="brow${r._late?' late':r._tight?' tight':''}${!r._active?' inactive':''}${selected&&selected.Id===r.Id?' sel':''}" data-id="${r.Id}" tabindex="0" role="button" aria-label="${esc(r.Customer+' '+r.Style)}: open details">
+    <div class="checks"><span class="ck"><span class="cl">Reviewed</span>${colOf('Reviewed').f(r)}</span><span class="ck"><span class="cl">Sent</span>${colOf('SentToBuyer').f(r)}</span></div>
     <div><b>${esc(r.Customer)}</b> · ${esc(r.Style)}<div class="sub">PO ${esc(r.CustPO||'—')} · import ${esc(r.ImportPO||'—')}</div></div>
-    <div>${ds(r.StartDate)}–${ds(r.CancelDate)}<div class="sub">${r.ShortQty?`<b style="color:var(--short)">${r.ShortQty} short</b>`:esc(r.OrdNo||'')}</div></div>
+    <div><span class="cl">Window </span>${ds(r.StartDate)}–${ds(r.CancelDate)}<div class="sub">${r.ShortQty?`<b style="color:var(--short)">${r.ShortQty} short</b>`:esc(r.OrdNo||'')}</div></div>
     <div>${shipTag(r)}<div class="sub" title="${esc(conts.join(', '))}">${esc(conts[0]||'')}${conts.length>1?` +${conts.length-1}`:''}</div></div>
-    <div class="wh ${r._late?'bad':r._tight?'warn':''}">${w!=null?ds(r.WhseDate):'–'}<div class="sub">${r.ETA?'ETA '+ds(r.ETA):'no ETA'}</div></div>
+    <div class="wh ${r._late?'bad':r._tight?'warn':''}"><span class="cl">In whse </span>${w!=null?ds(r.WhseDate):'–'}<div class="sub">${r.ETA?'ETA '+ds(r.ETA)+srcTag(r):'no ETA'}</div></div>
     <div class="why">${parts.map((t,i)=>`<span class="${i===0?'lead':''}">${esc(t)}</span>`).join('<span class="dot"> · </span>')}</div>
     <div class="nt" title="${esc(r.LineNotes||'')}">${r.LineNotes?'✎':''}</div></div>`;
 }
 const BHEAD='<div class="bhead"><div>Rev · Sent</div><div>Customer · Style</div><div>Window</div><div>Container</div><div>In whse</div><div>Why it is here</div><div></div></div>';
 function paintBoard(){
   const D=boardData();
-  const cnt={new:D.newRows.length, lfd:D.lfd.length, rev:D.rev.length, resend:D.resend.length};
+  const cnt={new:D.newRows.length, lfd:D.lfd.length, rev:D.rev.filter(r=>r._needsRev).length, resend:D.resend.filter(r=>r._stale).length};
   if(!state.card||!CARDS.some(c=>c.k===state.card)) state.card=(CARDS.find(c=>cnt[c.k]>0)||CARDS[2]).k;
   const cut=reportCutoff();
   const subs={
     new: cut?`since ${runWhen(cut)}`:'last 7 days',
     lfd: D.lfd.length?`next: ${rel(D.lfd[0].lfd)} (${ds(D.lfd[0].lfd)})`:'nothing at port near its LFD',
-    rev: `${D.rev.filter(r=>r._late).length} late · ${D.rev.filter(r=>r._tight).length} tight`,
-    resend: D.resend.length?`oldest sent ${ds(D.resend.map(r=>r.SentToBuyerDate).filter(Boolean).sort()[0])}`:'buyers are up to date',
+    rev: `${D.rev.filter(r=>r._needsRev&&r._late).length} late · ${D.rev.filter(r=>r._needsRev&&r._tight).length} tight`,
+    resend: cnt.resend?`oldest sent ${ds(D.resend.filter(r=>r._stale).map(r=>r.SentToBuyerDate).filter(Boolean).sort()[0])}`:'buyers are up to date',
   };
-  $('cards').innerHTML=CARDS.map(c=>`<button class="card${state.card===c.k?' on':''}${cnt[c.k]===0?' zero':''}" data-c="${c.k}">
+  const focused=document.activeElement&&document.activeElement.classList.contains('card')?document.activeElement.dataset.c:null;
+  $('cards').innerHTML=CARDS.map(c=>`<button class="card${state.card===c.k?' on':''}${cnt[c.k]===0?' zero':''}" data-c="${c.k}" aria-pressed="${state.card===c.k}">
     <div class="n">${cnt[c.k]===0?'✓':cnt[c.k]}</div><div class="l">${c.l}</div><div class="s">${esc(subs[c.k])}</div></button>`).join('');
-  $('cards').querySelectorAll('.card').forEach(el=>el.onclick=()=>{ state.card=el.dataset.c; paintBoard(); syncHash(); });
+  $('cards').querySelectorAll('.card').forEach(el=>el.onclick=()=>{ if(state.card!==el.dataset.c) boardKeep.clear(); state.card=el.dataset.c; paintBoard(); syncHash(); });
+  if(focused) $('cards').querySelector(`.card[data-c="${focused}"]`).focus();
   const a=D.act;
   $('strip').innerHTML=`<span><b>${a.filter(r=>r._late).length}</b> late</span><span><b>${a.filter(r=>r._tight).length}</b> tight</span>`+
     `<span><b>${a.filter(r=>(r.ShortQty||0)>0).length}</b> short</span><span><b>${a.filter(r=>r._rev).length}</b> reviewed</span>`+
     `<span><b>${a.length}</b> open lines</span><button class="go" id="toLines">See all lines →</button>`;
   $('toLines').onclick=()=>setTab('lines');
   const card=CARDS.find(c=>c.k===state.card);
-  $('boardTitle').textContent=card.l; $('boardSub').textContent=subs[card.k];
-  let html='', shown=0;
+  let html='', shown=0, total=0;
   if(state.card==='lfd'){
-    D.lfd.forEach(g=>{ const ls=g.lines.filter(boardFilter); if(!ls.length) return; shown+=ls.length;
+    D.lfd.forEach(g=>{ total+=g.lines.length; const ls=g.lines.filter(boardFilter); if(!ls.length) return; shown+=ls.length;
       html+=`<div class="cgroup"><b>${esc(g.container)}</b><span class="lfdsoon">LFD ${rel(g.lfd)} · ${ds(g.lfd)}</span>`+
-        `<span>${esc(g.status||'')}</span><span>${g.pickup?(dayNo(g.pickup)>dayNo(g.lfd)?'<b style="color:var(--past)">pickup '+ds(g.pickup)+', after the LFD</b>':'pickup '+ds(g.pickup)):'<b style="color:var(--past)">no pickup booked</b>'}</span>`+
-        `<span class="dim">${plural(g.lines.length,'line')}</span></div>`+ls.map(r=>boardRow(r)).join(''); });
+        `<span>${esc(g.status||'')}</span><span>${g.pickup&&dayNo(g.pickup)<=dayNo(g.lfd)?'pickup '+ds(g.pickup):`<b style="color:var(--past)">${pickupText(g.pickup,g.lfd)}</b>`}</span>`+
+        `<span class="dim">${plural(ls.length,'line')}${ls.length<g.lines.length?' of '+g.lines.length:''}</span></div>`+ls.map(r=>boardRow(r)).join(''); });
   }else{
-    const rows=(state.card==='new'?D.newRows:state.card==='rev'?D.rev:D.resend).filter(boardFilter); shown=rows.length;
+    const all=state.card==='new'?D.newRows:state.card==='rev'?D.rev:D.resend, rows=all.filter(boardFilter); shown=rows.length; total=all.length;
     html=rows.map(r=>{ if(state.card!=='new') return boardRow(r);
-      const cs=D.nb.get(r.Title)||[];
-      const what=[...new Map(cs.map(c=>[c.ChangeType,c])).values()].map(changeText);
-      return boardRow(r, what); }).join('');
+      const m=D.nb.get(r.Title)||new Map();
+      return boardRow(r, NEW_ORDER.filter(t=>m.has(t)).map(t=>changeText(m.get(t)))); }).join('');
   }
-  $('boardList').innerHTML=shown?BHEAD+html:`<div class="done">${cnt[state.card]?'Nothing matches the search.':'All clear ✓'}<span>${cnt[state.card]?'Clear the search or customer filter.':({new:'No new problems since the last report.',lfd:'No container at port is close to its last free day without a pickup.',rev:'Every late, tight or flagged line has been reviewed.',resend:'Nothing has changed since it was sent to a buyer.'})[state.card]}</span></div>`;
-  wireMarks($('boardList'));
-  $('boardList').querySelectorAll('.brow').forEach(el=>el.onclick=()=>openDrawer(lines.find(r=>r.Id==el.dataset.id)));
+  const filtering=$('bq').value.trim()||$('bCust').value;
+  $('boardTitle').textContent=card.l;
+  $('boardSub').textContent=filtering?`showing ${shown} of ${total}${$('bCust').value?' · '+$('bCust').value:''}`:subs[card.k];
+  $('boardList').innerHTML=shown?BHEAD+html:`<div class="done">${total?'Nothing matches the search.':'All clear ✓'}<span>${total?'Clear the search or customer filter.':({new:'No new problems since the last report.',lfd:'No container at port is close to its last free day without a pickup.',rev:'Every late, tight or flagged line has been reviewed.',resend:'Nothing has changed since it was sent to a buyer.'})[state.card]}</span></div>`;
+  wireMarks($('boardList'), true);
+  $('boardList').querySelectorAll('.brow').forEach(el=>{ const open=()=>openDrawer(lines.find(r=>r.Id==el.dataset.id));
+    el.onclick=open; el.onkeydown=e=>{ if((e.key==='Enter'||e.key===' ')&&e.target===el){ e.preventDefault(); open(); } }; });
 }
 /* checkbox wiring shared by the board and the All lines table */
-function wireMarks(root){
-  root.querySelectorAll('input[data-sent]').forEach(cb=>{ cb.onclick=e=>e.stopPropagation(); cb.onchange=()=>{ const r=lines.find(x=>x.Id==cb.dataset.sent); if(r&&r._stale){ cb.checked=true; setSent(r,true); } else setSent(r, cb.checked); }; });
-  root.querySelectorAll('input[data-rev]').forEach(cb=>{ cb.onclick=e=>e.stopPropagation(); cb.onchange=()=>setReviewed(lines.find(x=>x.Id==cb.dataset.rev), cb.checked); });
+function wireMarks(root, keep){
+  const hold=id=>{ if(keep) boardKeep.add(+id); };
+  root.querySelectorAll('input[data-sent]').forEach(cb=>{ cb.onclick=e=>e.stopPropagation(); cb.onchange=()=>{ hold(cb.dataset.sent); const r=lines.find(x=>x.Id==cb.dataset.sent); if(r&&r._stale){ cb.checked=true; setSent(r,true); } else setSent(r, cb.checked); }; });
+  root.querySelectorAll('input[data-rev]').forEach(cb=>{ cb.onclick=e=>e.stopPropagation(); cb.onchange=()=>{ hold(cb.dataset.rev); setReviewed(lines.find(x=>x.Id==cb.dataset.rev), cb.checked); }; });
   root.querySelectorAll('label.sent,label.rev').forEach(l=>l.addEventListener('click',e=>e.stopPropagation()));
 }
 
@@ -948,7 +993,8 @@ function applyHash(){
     state.flags.clear(); (p.get('f')||'').split(',').filter(Boolean).forEach(t=>{ const ex=t.startsWith('-'), k=ex?t.slice(1):t; if(COUNTERS.some(c=>c[0]===k)) state.flags.set(k,ex?-1:1); });
     [['q','q'],['cust','fCust'],['fact','fFact'],['round','fRound'],['src','fSrc'],['ship','fShip']].forEach(([n,id])=>{ if(p.has(n)) $(id).value=p.get(n); });
     $('showGone').checked=p.get('gone')==='1';
-    const t=p.get('tab'); if(t&&TABS.includes(t)){ state.tab=t; document.querySelectorAll('.tab').forEach(el=>el.classList.toggle('active',el.dataset.tab===t)); TABS.forEach(n=>$(n+'Panel').classList.toggle('hidden',t!==n)); }
+    const LP=['f','q','cust','fact','round','src','ship','gone'];
+    const t=p.get('tab')||(!p.has('card')&&LP.some(n=>p.has(n))?'lines':null); if(t&&TABS.includes(t)){ state.tab=t; document.querySelectorAll('.tab').forEach(el=>el.classList.toggle('active',el.dataset.tab===t)); TABS.forEach(n=>$(n+'Panel').classList.toggle('hidden',t!==n)); }
     if(CARDS.some(c=>c.k===p.get('card'))) state.card=p.get('card');
   }finally{ applying=false; }
 }
