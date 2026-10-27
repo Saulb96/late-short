@@ -402,7 +402,7 @@ function enter(acct){
   const saved=sessionStorage.getItem('ls_hash'); if(saved&&!location.hash){ history.replaceState(null,'',location.pathname+saved); } sessionStorage.removeItem('ls_hash');
   $('whoName').textContent=(acct.idTokenClaims&&acct.idTokenClaims.name)||acct.username;
   gate.classList.add('hidden'); app.classList.remove('hidden');
-  $('signOut').onclick=async()=>{ await idb.clear(); msalApp.logoutRedirect(); };   // the saved copy goes with the sign-in
+  $('signOut').onclick=async()=>{ signingOut=true; await Promise.race([idb.clear(), new Promise(r=>setTimeout(r,1500))]); msalApp.logoutRedirect(); };   // the saved copy goes with the sign-in
   loadAll();
 }
 
@@ -448,16 +448,19 @@ const RUN_SEL="Title,RunDate,Trigger,Emailed,Reported,TrackerModified,ReportFile
 
 const noteSaves={};   // Id -> {text, at}: notes saved while a reload was in flight
 /* Saved copy + changed-only loading.
-   Lines are never deleted (a line gone from the ERP gets Active=false) and the change log only grows, so after one
-   full load the page asks SharePoint only for lines modified since then and for the change rows of runs it has not
-   seen. The copy is kept in this browser (IndexedDB) per signed-in account; Sign out clears it. */
-const CACHE_SHAPE=`v1|${LINE_SEL}|${CHG_SEL}|${RUN_SEL}`, CACHE_MAX_DAYS=7;
+   Lines are never deleted (a line gone from the ERP gets Active=false) and the change log only grows, so between full
+   loads the page asks SharePoint only for lines modified since the last load and for the change rows of runs it has not
+   seen. A full load still happens at least once a day (FULL_EVERY_H), which also repairs anything done by hand in
+   SharePoint. The copy is kept in this browser (IndexedDB) per signed-in account; Sign out clears it.
+   While the saved copy is on screen and not yet updated, marks and notes wait (they would save yesterday's dates). */
+const CACHE_SHAPE=`v1|${LINE_SEL}|${CHG_SEL}|${RUN_SEL}`, SHOW_MAX_DAYS=7, FULL_EVERY_H=20;
+let signingOut=false;
 const idb={ db:null,
   open(){ return this.db||(this.db=new Promise((res,rej)=>{ const q=indexedDB.open('late-short',1);
     q.onupgradeneeded=()=>q.result.createObjectStore('kv'); q.onsuccess=()=>res(q.result); q.onerror=()=>rej(q.error); })); },
   async get(k){ try{ const db=await this.open(); return await new Promise((res,rej)=>{ const r=db.transaction('kv').objectStore('kv').get(k);
     r.onsuccess=()=>res(r.result||null); r.onerror=()=>rej(r.error); }); }catch(e){ return null; } },
-  async set(k,v){ try{ const db=await this.open(); await new Promise((res,rej)=>{ const t=db.transaction('kv','readwrite'); t.objectStore('kv').put(v,k);
+  async set(k,v){ if(signingOut) return; try{ const db=await this.open(); await new Promise((res,rej)=>{ const t=db.transaction('kv','readwrite'); t.objectStore('kv').put(v,k);
     t.oncomplete=res; t.onerror=()=>rej(t.error); }); }catch(e){} },
   async clear(){ try{ const db=await this.open(); await new Promise(res=>{ const t=db.transaction('kv','readwrite'); t.objectStore('kv').clear();
     t.oncomplete=res; t.onerror=res; }); }catch(e){} },
@@ -465,52 +468,72 @@ const idb={ db:null,
 const cacheKey=()=>'data:'+((account&&account.homeAccountId)||'');
 const plain=r=>{ const o={}; for(const k in r) if(k[0]!=='_') o[k]=r[k]; return o; };   // store the SharePoint fields, not the page's derived ones
 const maxOf=(arr,k)=>arr.reduce((m,x)=>x[k]&&x[k]>m?x[k]:m,'');
-let loading=null;
-async function loadAll(){ if(loading) return loading; loading=load().finally(()=>{ loading=null; }); return loading; }
+let loading=null, staleView=false;
+const markSaves={};   // Id -> {fields, at}: Sent / Reviewed saved while a reload was in flight
+/* force: start a fresh read even if one is running (Refresh needs data written after the Function ran) */
+async function loadAll(force){
+  if(loading){ if(!force) return loading; await loading.catch(()=>{}); }
+  loading=load().finally(()=>{ loading=null; }); return loading;
+}
 async function load(){
-  const t0=Date.now(), since=new Date(Date.now()-changeDays*864e5).toISOString().slice(0,10)+'T00:00:00Z';
+  const t0=Date.now(), days=changeDays, since=new Date(Date.now()-days*864e5).toISOString().slice(0,10)+'T00:00:00Z';
   const cache=await idb.get(cacheKey());
-  const usable=!!cache&&cache.shape===CACHE_SHAPE&&Date.now()-cache.at<CACHE_MAX_DAYS*864e5&&cache.changeDays>=changeDays&&cache.maxMod;
-  if(usable&&!lines.length){   // show the saved copy straight away while the update runs
-    apply(cache.lines, cache.changes, cache.runs, t0);
+  const showable=!!cache&&cache.shape===CACHE_SHAPE&&Date.now()-cache.at<SHOW_MAX_DAYS*864e5;
+  const deltaOK=showable&&cache.changeDays>=days&&cache.maxMod&&cache.fullAt&&Date.now()-cache.fullAt<FULL_EVERY_H*36e5;
+  if(showable&&!lines.length){   // show the saved copy straight away while the update runs
+    apply(cache.lines, cache.changes, cache.runs, t0); staleView=true;
     $('asof').insertAdjacentHTML('beforeend',' · <span class="warn" id="updating">updating…</span>');
   }else if(!lines.length) $('asof').textContent='Loading…';
   try{
-    let L, C, R;
-    if(usable){
+    let L=null, C, R, full=false;
+    if(deltaOK){
       try{
         const modSince=new Date(Date.parse(cache.maxMod)-10*60000).toISOString().slice(0,19)+'Z';   // 10 min overlap for clock skew
         const [dl, R2]=await Promise.all([listAll(LISTS.lines, LINE_SEL, `fields/Modified ge '${modSince}'`), listAll(LISTS.runs, RUN_SEL)]);
         // a run writes its changes before its own run row, so a run already in the saved copy has all its changes there
-        const seen=new Set(cache.runs.map(r=>String(r.Title)));
-        const fresh=R2.filter(r=>!seen.has(String(r.Title))).map(r=>String(r.Title));
+        const seen=new Set(cache.runs.map(r=>r.Id));
+        const fresh=[...new Set(R2.filter(r=>!seen.has(r.Id)).map(r=>String(r.Title)))];
         const dc=(await Promise.all(fresh.map(t=>listAll(LISTS.changes, CHG_SEL, `fields/RunTitle eq '${t.replace(/'/g,"''")}'`)))).flat();
         const lb=new Map(cache.lines.map(x=>[x.Id,x])); dl.forEach(x=>lb.set(x.Id,x)); L=[...lb.values()];
         const cb=new Map(cache.changes.map(x=>[x.Id,x])); dc.forEach(x=>cb.set(x.Id,x)); C=[...cb.values()].filter(c=>!c.RunDate||c.RunDate>=since);
         R=R2;
-      }catch(e){ L=null; }   // a changed-only query failed: fall back to a full load below
+      }catch(e){ console.warn('Late & Short: changed-only load failed, doing a full load —', e.message); L=null; }
     }
     if(!L){
+      full=true;
       R=await listAll(LISTS.runs, RUN_SEL);   // runs first: every run saved with the copy then has its changes in it too
       [L,C]=await Promise.all([listAll(LISTS.lines, LINE_SEL), listAll(LISTS.changes, CHG_SEL, `fields/RunDate ge '${since}'`)]);
     }
     L=L.map(plain); C=C.map(plain); R=R.map(plain);
-    idb.set(cacheKey(), {shape:CACHE_SHAPE, at:Date.now(), changeDays, lines:L, changes:C, runs:R, maxMod:maxOf(L,'Modified'), maxRun:maxOf(R,'Title')});
-    apply(L, C, R, t0);
+    idb.set(cacheKey(), {shape:CACHE_SHAPE, at:Date.now(), fullAt:full?Date.now():cache.fullAt, changeDays:days,
+                         lines:L, changes:C, runs:R, maxMod:maxOf(L,'Modified')});
+    if(changeDays>days) C=mergeById(C, changes);   // the Changes tab fetched the longer history meanwhile: keep it
+    apply(L, C, R, t0); staleView=false;
   }catch(e){
-    if($('updating')) $('updating').textContent='could not update: '+e.message;
+    if($('updating')) $('updating').textContent='could not update ('+e.message+') — press Refresh to try again';
     else $('asof').innerHTML='<span class="warn">Could not read the lists: '+esc(e.message)+'</span>';
   }
 }
+function mergeById(a, b){ const m=new Map(a.map(x=>[x.Id,x])); (b||[]).forEach(x=>{ if(!m.has(x.Id)) m.set(x.Id,plain(x)); }); return [...m.values()]; }
 function apply(L, C, R, t0){
   boardKeep.clear();
   lines=L.map(x=>normLine({...x})); changes=C.map(x=>({...x})).sort((a,b)=>b.Id-a.Id); runs=R.map(x=>({...x})).sort((a,b)=>b.Id-a.Id).slice(0,60);
-  lines.forEach(x=>{ const n=noteSaves[x.Id]; if(n&&n.at>=t0){ x.LineNotes=n.text; normLine(x); } });
+  lines.forEach(x=>{ const n=noteSaves[x.Id], m=markSaves[x.Id];
+    if(n&&n.at>=t0) x.LineNotes=n.text;
+    if(m&&m.at>=t0) Object.assign(x, m.fields);
+    if((n&&n.at>=t0)||(m&&m.at>=t0)) normLine(x); });
   const a=document.activeElement, nid=a&&a.matches&&a.matches('input[data-note]')?a.dataset.note:null, nv=nid?a.value:'', ns=nid?a.selectionStart:0, nedit=!!nid&&a.value!==a._v0;
   if(selected){ const fresh=lines.find(x=>x.Id===selected.Id), typed=$('dNote').value, dirty=typed.trim()!==(selected.LineNotes||'');
     if(fresh){ openDrawer(fresh); if(dirty) $('dNote').value=typed; } else closeDrawer(); }
   buildFilterOptions(); buildBoardOptions(); paintAsOf(); paintIssueBadge(); if(!hashApplied){ applyHash(); hashApplied=true; } paintCounters(); paint();
   if(nid){ const inp=document.querySelector(`input[data-note="${nid}"]`); if(inp){ inp.focus(); if(nedit){ inp.value=nv; inp.setSelectionRange(ns,ns); } } }
+}
+/* marks made on the saved copy before it is updated would record yesterday's ETA / class / review signature */
+function waitForUpdate(repaint){
+  if(!staleView) return false;
+  toast('Still updating to the latest data — try again in a moment');
+  if(repaint){ paint(); if(selected){ const r=lines.find(x=>x.Id===selected.Id); if(r){ paintSentState(r); paintRevState(r); } } }
+  return true;
 }
 function normLine(r){
   r._flags=(r.Flags||'').split(',').map(s=>s.trim()).filter(Boolean);
@@ -951,22 +974,26 @@ function paintRevState(r){
   $('revToggle').onclick=()=>setReviewed(r, !r._rev);
 }
 async function setReviewed(r, on){
+  if(waitForUpdate(true)) return;
   if(r) r=lines.find(x=>x.Id===r.Id)||r;
   if(!r) return;
   const today=new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'});
   const fields=on?{Reviewed:true, ReviewedDate:today+'T12:00:00Z', ReviewedBy:$('whoName').textContent, ReviewedSig:r.ReviewSig||''}:{Reviewed:false, ReviewedDate:null, ReviewedBy:'', ReviewedSig:''};
-  try{ await patchItem(LISTS.lines, r.Id, fields); Object.assign(r, fields); normLine(r); toast(on?'Marked reviewed':'Reviewed cleared'); }
+  try{ await patchItem(LISTS.lines, r.Id, fields); markSaves[r.Id]={fields:{...((markSaves[r.Id]||{}).fields||{}), ...fields}, at:Date.now()};
+       Object.assign(r, fields); normLine(r); toast(on?'Marked reviewed':'Reviewed cleared'); }
   catch(e){ toast('Could not save: '+e.message); }
   paintCounters(); paint(); if(selected&&selected.Id===r.Id){ paintRevState(r); $('dFlags').innerHTML=flagPills(r); }
 }
 async function setSent(r, on){
+  if(waitForUpdate(true)) return;
   if(r) r=lines.find(x=>x.Id===r.Id)||r;
   if(!r) return;
   const today=new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'});
   const snap=on?{SentETA:r.ETA?d10(r.ETA)+'T12:00:00Z':null, SentCRD:r.CRD?d10(r.CRD)+'T12:00:00Z':null, SentClass:r.ETAClass||'', SentShort:r.ShortQty||0, SentStale:false}:{SentETA:null, SentCRD:null, SentClass:'', SentShort:0, SentStale:false};
   const fields=Object.assign(on?{SentToBuyer:true, SentToBuyerDate:today+'T12:00:00Z', SentToBuyerBy:$('whoName').textContent}:{SentToBuyer:false, SentToBuyerDate:null, SentToBuyerBy:''}, snap);
   const wasStale=r._stale;
-  try{ await patchItem(LISTS.lines, r.Id, fields); Object.assign(r, fields); r._sent=on; r._stale=false;
+  try{ await patchItem(LISTS.lines, r.Id, fields); markSaves[r.Id]={fields:{...((markSaves[r.Id]||{}).fields||{}), ...fields}, at:Date.now()};
+       Object.assign(r, fields); r._sent=on; r._stale=false;
        r._flags=r._flags.filter(f=>f!=='ChangedSinceSent'); r.Flags=r._flags.join(', ');
        toast(on?(wasStale?'Marked re-sent to buyer':'Marked sent to buyer'):'Sent-to-buyer cleared'); }
   catch(e){ toast('Could not save: '+e.message); }
@@ -974,6 +1001,7 @@ async function setSent(r, on){
 }
 async function saveNote(r, text){
   if(!r) return; text=(text||'').trim(); if(text===(r.LineNotes||'')) return;
+  if(waitForUpdate(false)) return;   // the typed text stays in the box; leaving it again saves
   try{ await patchItem(LISTS.lines, r.Id, {LineNotes:text}); noteSaves[r.Id]={text, at:Date.now()};
        const cur=lines.find(x=>x.Id===r.Id)||r; cur.LineNotes=text; normLine(cur); if(cur!==r){ r.LineNotes=text; normLine(r); }
        const ti=document.querySelector(`input[data-note="${r.Id}"]`), dn=$('dNote');   // no full repaint: keeps focus
@@ -996,7 +1024,7 @@ async function refreshNow(){
     const tok=await apiToken();
     const r=await fetch(RUN_URL,{method:'POST',headers:{'Authorization':'Bearer '+tok}});
     const j=await r.json().catch(()=>({}));
-    await loadAll();
+    await loadAll(true);
     if(r.status===429) toast(j.error||'Ran too recently — lists reloaded');
     else if(!r.ok) toast(j.error||('Run failed: '+r.status));
     else toast(`Refreshed — ${j.summary?j.summary.late+' late, '+j.changes+' change'+(j.changes===1?'':'s'):'ok'}`+(j.warnings&&j.warnings.length?' · '+j.warnings.join(' · '):''));
@@ -1066,6 +1094,7 @@ function setTab(t){ state.tab=t; document.querySelectorAll('.tab').forEach(el=>e
   if(t==='changes'&&changeDays<CHANGE_DAYS) loadOlderChanges(); }
 async function loadOlderChanges(){   // the board only needs the last two weeks; fetch the full history the first time the Changes tab opens
   changeDays=CHANGE_DAYS; $('changesBody').insertAdjacentHTML('afterbegin','<div class="meta" id="chLoading">Loading older changes…</div>');
+  if(loading) await loading.catch(()=>{});
   try{ const since=new Date(Date.now()-CHANGE_DAYS*864e5).toISOString().slice(0,10)+'T00:00:00Z';
        changes=(await listAll(LISTS.changes, CHG_SEL, `fields/RunDate ge '${since}'`)).sort((a,b)=>b.Id-a.Id);
        const c=await idb.get(cacheKey()); if(c){ c.changes=changes.map(plain); c.changeDays=CHANGE_DAYS; idb.set(cacheKey(), c); }
