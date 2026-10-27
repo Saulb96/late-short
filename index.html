@@ -23,6 +23,7 @@
   .glass{background:var(--glass); backdrop-filter:blur(18px) saturate(1.4); -webkit-backdrop-filter:blur(18px) saturate(1.4);
     border:1px solid var(--edge); box-shadow:var(--shadow); border-radius:18px}
   .hidden{display:none !important}
+  .panel.glass,#drawer.glass{backdrop-filter:none; -webkit-backdrop-filter:none; background:rgba(255,255,255,.86)}   /* big blurred panels are slow to repaint */
   button,select,input,textarea{font-family:inherit}
 
   /* gate */
@@ -337,6 +338,8 @@ const GRAPH_SCOPES = ["https://graph.microsoft.com/Sites.ReadWrite.All"];
 const GRAPH = "https://graph.microsoft.com/v1.0";
 const SITE_PATH = "met1sol.sharepoint.com:/sites/Reports";   // where the Function writes the three lists
 const CHANGE_DAYS = 90;                                      // Changes tab shows this many days
+const BOARD_DAYS = 14;                                       // first load: enough changes for the board; the Changes tab fetches the rest
+let changeDays = BOARD_DAYS;
 const LISTS = { lines:"Shortage_Lines", changes:"Shortage_Changes", runs:"Shortage_Runs" };
 const RUN_URL = "https://metro1-lateshort-fn.azurewebsites.net/api/run";
 const API_SCOPES = ["api://0f167855-bc37-4b16-8aab-df8047df434d/access_as_user"]; // token for the Function; no function key anywhere
@@ -363,7 +366,7 @@ const STALE_HOURS = 30;
       x.beginPath(); x.arc(p.x,p.y,p.r,0,7);
       x.fillStyle='rgba('+p.c[0]+','+p.c[1]+','+p.c[2]+',0.18)'; x.fill();
     });
-    if(!still) requestAnimationFrame(tick);
+    if(!still&&t<240) requestAnimationFrame(tick);   // settle after ~4 s; a moving canvas behind glass makes scrolling heavy
   }
   tick();
 })();
@@ -437,7 +440,7 @@ async function patchItem(list, id, fields){
 
 /* ───────────────────── data ───────────────────── */
 let lines=[], changes=[], runs=[], selected=null;
-const state={tab:'board', card:null, flags:new Map(), sort:{k:'StartDate',d:1}}; // flags: chip -> 1 include, -1 exclude
+const state={tab:'board', card:null, boardLimit:150, flags:new Map(), sort:{k:'StartDate',d:1}}; // flags: chip -> 1 include, -1 exclude
 
 const LINE_SEL="Title,Customer,OrdNo,CustPO,Style,QtyOrd,QtyAlc,QtyShp,StatusText,StatusKind,ShortQty,BookedQty,ImportPO,RoundNo,Container,Factory,CRD,ShipBy,ETD,ETA,ETASource,KeyedETA,StartDate,CancelDate,Flags,IsLate,SheetLoc,Landed,FirstSeen,LastChanged,Active,SentToBuyer,SentToBuyerDate,SentToBuyerBy,LineNotes,IsTight,ETAClass,IsFuture,SentETA,SentCRD,SentClass,SentShort,SentStale,ShipStatus,WhseDate,LFD,PickupDate,DeliveryDate,Released,ShipNote,ReviewSig,Reviewed,ReviewedDate,ReviewedBy,ReviewedSig,LFDDetail";
 const CHG_SEL="Title,RunDate,RunTitle,ChangeType,ChangedField,OldValue,NewValue,Customer,Style,ImportPO,Detail";
@@ -448,7 +451,7 @@ async function loadAll(){
   $('asof').textContent='Loading…';
   const t0=Date.now();
   try{
-    const since=new Date(Date.now()-CHANGE_DAYS*864e5).toISOString().slice(0,10)+'T00:00:00Z';
+    const since=new Date(Date.now()-changeDays*864e5).toISOString().slice(0,10)+'T00:00:00Z';
     const [L,C,R]=await Promise.all([
       listAll(LISTS.lines, LINE_SEL),
       listAll(LISTS.changes, CHG_SEL, `fields/RunDate ge '${since}'`),
@@ -483,8 +486,9 @@ const SRC_TAG={Drayage:'DRAY',Forwarder:'FWD',Tracker:'TRK',ERP:'ERP'};
 const SHIP_CLS={'Not shipped':'none','On the water':'water','At port':'port','Available':'avail','Picked up':'picked','Delivered':'deliv','Landed':'landed'};
 function shipTag(r){ return r.ShipStatus?`<span class="ship ${SHIP_CLS[r.ShipStatus]||''}">${esc(r.ShipStatus)}</span>`:'<span class="dim">–</span>'; }
 function srcTag(r){ return r.ETASource?`<span class="src ${r.ETASource==='ERP'?'erp':''}">${SRC_TAG[r.ETASource]||esc(r.ETASource)}</span>`:''; }
-function d10(s){ return s?new Date(s).toLocaleDateString('en-CA',{timeZone:'America/New_York'}):''; }
-function fd(s){ return s?new Date(s).toLocaleDateString('en-US',{timeZone:'America/New_York',month:'numeric',day:'numeric',year:'2-digit'}):''; }
+const memo=f=>{ const m=new Map(); return s=>{ if(!s) return ''; let v=m.get(s); if(v===undefined){ v=f(s); m.set(s,v); } return v; }; };
+const d10=memo(s=>new Date(s).toLocaleDateString('en-CA',{timeZone:'America/New_York'}));
+const fd=memo(s=>new Date(s).toLocaleDateString('en-US',{timeZone:'America/New_York',month:'numeric',day:'numeric',year:'2-digit'}));
 function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove('show'),2600); }
 
@@ -632,10 +636,12 @@ const NEW_TYPES={NewLate:'New late',NewTight:'New tight',ETASlipped:'ETA slipped
   ReviewCleared:'Needs another look',LineReturned:'Back on the ERP report'};
 const NEW_ORDER=Object.keys(NEW_TYPES);
 const ISO=/^\d{4}-\d{2}-\d{2}$/;
-const dayNo=s=>{ if(!s) return null; const n=Math.round(new Date(d10(s)+'T12:00:00Z').getTime()/864e5); return isNaN(n)?null:n; };
-const todayNo=()=>Math.round(new Date(new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'})+'T12:00:00Z').getTime()/864e5);
+const dayNoM=memo(s=>{ const n=Math.round(new Date(d10(s)+'T12:00:00Z').getTime()/864e5); return isNaN(n)?null:n; });
+const dayNo=s=>{ if(!s) return null; const n=dayNoM(s); return n===''?null:n; };
+let _today={at:0,n:0};
+const todayNo=()=>{ const t=Date.now(); if(t-_today.at>60000) _today={at:t, n:Math.round(new Date(new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'})+'T12:00:00Z').getTime()/864e5)}; return _today.n; };
 const plural=(n,w)=>`${n} ${w}${n===1?'':'s'}`;
-const ds=s=>s?new Date(s).toLocaleDateString('en-US',{timeZone:'America/New_York',month:'numeric',day:'numeric'}):'';   // 10/24
+const ds=memo(s=>new Date(s).toLocaleDateString('en-US',{timeZone:'America/New_York',month:'numeric',day:'numeric'}));   // 10/24
 const isoShort=t=>String(t||'').replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g,(m,y,mo,d)=>`${+mo}/${+d}`);
 function runWhen(title){ const m=/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(title||''); if(!m) return title||'';
   const dt=new Date(`${m[1]}-${m[2]}-${m[3]}T12:00:00Z`), h=+m[4];
@@ -664,11 +670,10 @@ function stillApplies(c, r){
 function rel(s){ const d=dayNo(s); if(d==null) return ''; const n=d-todayNo();
   return n===0?'today':n===1?'tomorrow':n===-1?'yesterday':n>1&&n<7?`in ${n} days`:n<0?`${-n} days ago`:ds(s); }
 function pickupText(pk, lfd){ return pk?'pickup '+ds(pk)+(dayNo(pk)>dayNo(lfd)?' (after the LFD)':''):'no pickup booked'; }
-function lfdList(r){   // LFDDetail: "CONT|yyyy-mm-dd|status|yyyy-mm-dd; ..." written by the Function; bad entries are skipped
-  return (r.LFDDetail||'').split(';').map(x=>x.trim()).filter(Boolean).map(x=>x.split('|'))
+const lfdParse=memo(t=>t.split(';').map(x=>x.trim()).filter(Boolean).map(x=>x.split('|'))
     .filter(p=>p.length===4&&p[0]&&ISO.test(p[1]))
-    .map(([container,lfd,status,pickup])=>({container, lfd:lfd+'T12:00:00Z', status:status||'', pickup:ISO.test(pickup)?pickup+'T12:00:00Z':''}));
-}
+    .map(([container,lfd,status,pickup])=>({container, lfd:lfd+'T12:00:00Z', status:status||'', pickup:ISO.test(pickup)?pickup+'T12:00:00Z':''})));
+function lfdList(r){ return r.LFDDetail?lfdParse(r.LFDDetail):[]; }   // LFDDetail: "CONT|yyyy-mm-dd|status|yyyy-mm-dd; ..." from the Function
 function lfdOf(r){ const ls=lfdList(r); return ls.length?ls:(r.LFD?[{container:(r.Container||'—'), lfd:r.LFD, status:r.ShipStatus||'', pickup:r.PickupDate||''}]:[]); }
 /* what changed since the line was sent to the buyer: only the fields that actually moved */
 function sentDiff(r){
@@ -706,7 +711,10 @@ function urgency(r){
   if((r.ShortQty||0)>0) u+=100;
   return u;
 }
-const byUrgency=(a,b)=>urgency(b)-urgency(a)||(dayNo(a.StartDate)??9e9)-(dayNo(b.StartDate)??9e9)||String(a.Customer).localeCompare(String(b.Customer));
+function sortByUrgency(arr){
+  const k=new Map(arr.map(r=>[r,[urgency(r), dayNo(r.StartDate)??9e9]]));
+  return arr.sort((a,b)=>{ const x=k.get(a), y=k.get(b); return y[0]-x[0]||x[1]-y[1]||String(a.Customer).localeCompare(String(b.Customer)); });
+}
 /* Changes since the report before the latest one: on Monday that is everything since Friday's report.
    Reported = the run sent its own email / digest (runs it rolled up only get Emailed). */
 function reportCutoff(){
@@ -733,9 +741,9 @@ function boardData(){
   const conts=new Map();
   act.filter(r=>r._flags.includes('LFDRisk')).forEach(r=>lfdOf(r).forEach(x=>{
     if(!conts.has(x.container)) conts.set(x.container,{...x,lines:[]}); conts.get(x.container).lines.push(r); }));
-  return {nb, newRows:newRows.sort(byUrgency), lfd:[...conts.values()].sort((a,b)=>(dayNo(a.lfd)??9e9)-(dayNo(b.lfd)??9e9)),
-          rev:act.filter(r=>r._needsRev||boardKeep.has(r.Id)).sort(byUrgency),
-          resend:act.filter(r=>r._stale||boardKeep.has(r.Id)).sort(byUrgency), act};
+  return {nb, newRows:sortByUrgency(newRows), lfd:[...conts.values()].sort((a,b)=>(dayNo(a.lfd)??9e9)-(dayNo(b.lfd)??9e9)),
+          rev:sortByUrgency(act.filter(r=>r._needsRev||boardKeep.has(r.Id))),
+          resend:sortByUrgency(act.filter(r=>r._stale||boardKeep.has(r.Id))), act};
 }
 function buildBoardOptions(){
   const s=$('bCust'), cur=s.value;
@@ -774,7 +782,7 @@ function paintBoard(){
   const focused=document.activeElement&&document.activeElement.classList.contains('card')?document.activeElement.dataset.c:null;
   $('cards').innerHTML=CARDS.map(c=>`<button class="card${state.card===c.k?' on':''}${cnt[c.k]===0?' zero':''}" data-c="${c.k}" aria-pressed="${state.card===c.k}">
     <div class="n">${cnt[c.k]===0?'✓':cnt[c.k]}</div><div class="l">${c.l}</div><div class="s">${esc(subs[c.k])}</div></button>`).join('');
-  $('cards').querySelectorAll('.card').forEach(el=>el.onclick=()=>{ if(state.card!==el.dataset.c) boardKeep.clear(); state.card=el.dataset.c; paintBoard(); syncHash(); });
+  $('cards').querySelectorAll('.card').forEach(el=>el.onclick=()=>{ if(state.card!==el.dataset.c){ boardKeep.clear(); state.boardLimit=150; } state.card=el.dataset.c; paintBoard(); syncHash(); });
   if(focused) $('cards').querySelector(`.card[data-c="${focused}"]`).focus();
   const a=D.act;
   $('strip').innerHTML=`<span><b>${a.filter(r=>r._late).length}</b> late</span><span><b>${a.filter(r=>r._tight).length}</b> tight</span>`+
@@ -790,14 +798,17 @@ function paintBoard(){
         `<span class="dim">${plural(ls.length,'line')}${ls.length<g.lines.length?' of '+g.lines.length:''}</span></div>`+ls.map(r=>boardRow(r)).join(''); });
   }else{
     const all=state.card==='new'?D.newRows:state.card==='rev'?D.rev:D.resend, rows=all.filter(boardFilter); shown=rows.length; total=all.length;
-    html=rows.map(r=>{ if(state.card!=='new') return boardRow(r);
+    const more=rows.length-state.boardLimit;
+    html=rows.slice(0,state.boardLimit).map(r=>{ if(state.card!=='new') return boardRow(r);
       const m=D.nb.get(r.Title)||new Map();
-      return boardRow(r, NEW_ORDER.filter(t=>m.has(t)).map(t=>changeText(m.get(t)))); }).join('');
+      return boardRow(r, NEW_ORDER.filter(t=>m.has(t)).map(t=>changeText(m.get(t)))); }).join('')+
+      (more>0?`<div class="done" style="padding:16px"><button class="btn sm" id="boardMore">Show ${Math.min(more,150)} more (${more} not shown)</button></div>`:'');
   }
   const filtering=$('bq').value.trim()||$('bCust').value;
   $('boardTitle').textContent=card.l;
   $('boardSub').textContent=filtering?`showing ${shown} of ${total}${$('bCust').value?' · '+$('bCust').value:''}`:subs[card.k];
   $('boardList').innerHTML=shown?BHEAD+html:`<div class="done">${total?'Nothing matches the search.':'All clear ✓'}<span>${total?'Clear the search or customer filter.':({new:'No new problems since the last report.',lfd:'No container at port is close to its last free day without a pickup.',rev:'Every late, tight or flagged line has been reviewed.',resend:'Nothing has changed since it was sent to a buyer.'})[state.card]}</span></div>`;
+  if($('boardMore')) $('boardMore').onclick=e=>{ e.stopPropagation(); state.boardLimit+=150; paintBoard(); };
   wireMarks($('boardList'), true);
   $('boardList').querySelectorAll('.brow').forEach(el=>{ const open=()=>openDrawer(lines.find(r=>r.Id==el.dataset.id));
     el.onclick=open; el.onkeydown=e=>{ if((e.key==='Enter'||e.key===' ')&&e.target===el){ e.preventDefault(); open(); } }; });
@@ -816,14 +827,16 @@ function paintChanges(){
   const ty=$('cType').value, q=$('cq').value.trim().toLowerCase();
   const rows=changes.filter(c=>(!ty||c.ChangeType===ty)&&(!q||[c.Style,c.Customer,c.ImportPO,c.Title].join(' ').toLowerCase().includes(q)));
   if(!rows.length){ $('changesBody').innerHTML='<div class="empty">No changes logged yet. The first run after baseline starts the log.</div>'; return; }
-  const groups={}; rows.forEach(c=>{ const k=d10(c.RunDate); (groups[k]=groups[k]||[]).push(c); });
+  const cap=state.changesAll?rows.length:400, extra=rows.length-cap;
+  const groups={}; rows.slice(0,cap).forEach(c=>{ const k=d10(c.RunDate); (groups[k]=groups[k]||[]).push(c); });
   $('changesBody').innerHTML=Object.keys(groups).sort().reverse().map(k=>{
     const g=groups[k];
     return `<div class="runhdr">${fd(g[0].RunDate)} <span>${g.length} change${g.length===1?'':'s'}</span></div>
     <div class="tw" style="max-height:none"><table><thead><tr><th>Type</th><th>Customer</th><th>Style</th><th>Import PO</th><th>Field</th><th>From</th><th>To</th><th>Detail</th></tr></thead><tbody>`+
     g.map(c=>`<tr class="row" data-key="${esc(c.Title)}"><td><span class="ct ${CT_CLASS[c.ChangeType]||''}">${esc(c.ChangeType)}</span></td><td>${esc(c.Customer)}</td><td>${esc(c.Style)}</td><td>${esc(c.ImportPO)}</td><td>${esc(c.ChangedField)}</td><td>${esc(c.OldValue)}</td><td>${esc(c.NewValue)}</td><td class="wrap dim">${esc(c.Detail)}</td></tr>`).join('')+
     '</tbody></table></div>';
-  }).join('');
+  }).join('')+(extra>0?`<div class="done" style="padding:16px"><button class="btn sm" id="chMore">Show all ${rows.length} changes</button></div>`:'');
+  if($('chMore')) $('chMore').onclick=()=>{ state.changesAll=true; paintChanges(); };
   $('changesBody').querySelectorAll('tr.row').forEach(el=>el.onclick=()=>{ const r=lines.find(l=>l.Title===el.dataset.key); if(r) openDrawer(r); });
 }
 
@@ -932,7 +945,8 @@ async function apiToken(){
             msalApp.acquireTokenRedirect({scopes:API_SCOPES, account}); throw e; }
 }
 async function refreshNow(){
-  const btn=$('refreshBtn'); btn.disabled=true; btn.textContent='Refreshing…';
+  const btn=$('refreshBtn'); btn.disabled=true; const t0=Date.now();
+  const tick=setInterval(()=>{ btn.textContent=`Refreshing… ${Math.round((Date.now()-t0)/1000)} s`; },1000); btn.textContent='Refreshing…';
   try{
     const tok=await apiToken();
     const r=await fetch(RUN_URL,{method:'POST',headers:{'Authorization':'Bearer '+tok}});
@@ -942,7 +956,7 @@ async function refreshNow(){
     else if(!r.ok) toast(j.error||('Run failed: '+r.status));
     else toast(`Refreshed — ${j.summary?j.summary.late+' late, '+j.changes+' change'+(j.changes===1?'':'s'):'ok'}`+(j.warnings&&j.warnings.length?' · '+j.warnings.join(' · '):''));
   }catch(e){ toast('Could not refresh: '+(e.errorMessage||e.message||e)); }
-  btn.disabled=false; btn.textContent='Refresh';
+  clearInterval(tick); btn.disabled=false; btn.textContent='Refresh';
 }
 $('refreshBtn').onclick=refreshNow;
 
@@ -1003,12 +1017,21 @@ $('copyLink').onclick=()=>{ syncHash(); navigator.clipboard.writeText(location.h
 /* ───────────────────── tabs + filters ───────────────────── */
 const TABS=['board','lines','changes','runs','issues'];
 function setTab(t){ state.tab=t; document.querySelectorAll('.tab').forEach(el=>el.classList.toggle('active',el.dataset.tab===t));
-  TABS.forEach(n=>$(n+'Panel').classList.toggle('hidden',t!==n)); paint(); syncHash(); }
+  TABS.forEach(n=>$(n+'Panel').classList.toggle('hidden',t!==n)); paint(); syncHash();
+  if(t==='changes'&&changeDays<CHANGE_DAYS) loadOlderChanges(); }
+async function loadOlderChanges(){   // the board only needs the last two weeks; fetch the full history the first time the Changes tab opens
+  changeDays=CHANGE_DAYS; $('changesBody').insertAdjacentHTML('afterbegin','<div class="meta" id="chLoading">Loading older changes…</div>');
+  try{ const since=new Date(Date.now()-CHANGE_DAYS*864e5).toISOString().slice(0,10)+'T00:00:00Z';
+       changes=(await listAll(LISTS.changes, CHG_SEL, `fields/RunDate ge '${since}'`)).sort((a,b)=>b.Id-a.Id);
+       buildFilterOptions(); if(state.tab==='changes') paintChanges(); }
+  catch(e){ changeDays=BOARD_DAYS; toast('Could not load older changes: '+e.message); }
+  if($('chLoading')) $('chLoading').remove();
+}
 document.querySelectorAll('.tab').forEach(el=>el.onclick=()=>setTab(el.dataset.tab));
 function paint(){ if(state.tab==='board') paintBoard(); else if(state.tab==='lines') paintLines(); else if(state.tab==='changes') paintChanges(); else if(state.tab==='issues') paintIssues(); else paintRuns(); }
 ['q','fCust','fFact','fRound','fSrc','fShip','showGone'].forEach(id=>$(id).addEventListener('input',()=>{ paintLines(); syncHash(); }));
 ['cType','cq'].forEach(id=>$(id).addEventListener('input',paintChanges));
-['bq','bCust'].forEach(id=>$(id).addEventListener('input',paintBoard));
+['bq','bCust'].forEach(id=>$(id).addEventListener('input',()=>{ state.boardLimit=150; paintBoard(); }));
 $('clearF').onclick=()=>{ ['q','fCust','fFact','fRound','fSrc','fShip'].forEach(id=>$(id).value=''); $('showGone').checked=false; state.flags.clear(); paintCounters(); paintLines(); syncHash(); };
 
 initAuth();
