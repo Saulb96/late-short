@@ -85,7 +85,7 @@
   .counter[data-k=notrel] .n{color:var(--amb)} .counter[data-k=disagree] .n{color:var(--design)} .counter[data-k=reviewed] .n{color:var(--landed)}
 
   /* action board */
-  .cards{display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-bottom:10px}
+  .cards{display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; margin-bottom:10px}
   .card{padding:16px 18px 14px; cursor:pointer; border-radius:16px; background:rgba(255,255,255,.55); border:1px solid var(--edge);
     transition:.13s; user-select:none; text-align:left; font:inherit; color:inherit}
   .card:hover{background:rgba(255,255,255,.82)}
@@ -94,7 +94,7 @@
   .card .l{font-size:13px; font-weight:600; margin-top:6px}
   .card .s{font-size:11.5px; color:var(--muted); margin-top:4px; min-height:15px}
   .card[data-c=new] .n{color:var(--accentink)} .card[data-c=lfd] .n{color:var(--past)}
-  .card[data-c=rev] .n{color:var(--ink)} .card[data-c=resend] .n{color:var(--design)}
+  .card[data-c=rev] .n{color:var(--ink)} .card[data-c=resend] .n{color:var(--design)} .card[data-c=past] .n{color:var(--past)}
   .card.zero .n{color:var(--landed)}
   .strip{font-size:12px; color:var(--muted); margin:2px 4px 14px; display:flex; gap:16px; flex-wrap:wrap; align-items:center}
   .strip b{color:var(--ink); font-weight:600}
@@ -175,6 +175,8 @@
   .pill.landed{background:rgba(54,163,122,.15); color:var(--landed)}
   .pill.ponotfound{background:rgba(242,115,74,.16); color:#b4452f}
   .pill.lfd{background:rgba(180,69,47,.16); color:var(--past)}
+  .pill.past{background:rgba(180,69,47,.22); color:var(--past)}
+  .counter[data-k=past] .n{color:var(--past)}
   .pill.notrel{background:rgba(148,102,214,.15); color:var(--amb)}
   .pill.disagree{background:none; color:var(--design); border:1px solid rgba(242,115,74,.55)}
   .ship{font-size:11px; font-weight:600; white-space:nowrap}
@@ -546,10 +548,11 @@ function normLine(r){
   r._rev=r.Reviewed===true;
   r._needsRev=!r._rev && (r._late||r._tight||REVIEW_FLAGS.some(f=>r._flags.includes(f)));
   r._lfdSoon=r._flags.includes('LFDRisk');
+  r._past=r._flags.includes('PastCancel');   // cancel date already behind us: needs the buyer, not a faster container
   r._hay=[r.Style,r.CustPO,r.ImportPO,r.Container,r.Customer,r.OrdNo,r.RoundNo,r.Factory,r.StatusText,r.LineNotes,r.ShipStatus].join(' ').toLowerCase();
   return r;
 }
-const REVIEW_FLAGS=['LFDRisk','NotReleased','SourcesDisagree','NotInReports','PONotFound'];   // same list the Function uses, minus NoETA
+const REVIEW_FLAGS=['PastCancel','LFDRisk','NotReleased','SourcesDisagree','NotInReports','PONotFound'];   // same list the Function uses, minus NoETA
 const SRC_TAG={Drayage:'DRAY',Forwarder:'FWD',Tracker:'TRK',ERP:'ERP'};
 const SHIP_CLS={'Not shipped':'none','On the water':'water','At port':'port','Available':'avail','Picked up':'picked','Delivered':'deliv','Landed':'landed'};
 function shipTag(r){ return r.ShipStatus?`<span class="ship ${SHIP_CLS[r.ShipStatus]||''}">${esc(r.ShipStatus)}</span>`:'<span class="dim">–</span>'; }
@@ -577,8 +580,9 @@ function paintAsOf(){
 
 /* counters double as flag filters */
 const COUNTERS=[
-  ['notrev','Not reviewed', r=>r._needsRev],
-  ['late','Late', r=>r._late],
+  ['notrev','Not reviewed', r=>r._needsRev&&!r._past],
+  ['late','Late', r=>r._late&&!r._past],
+  ['past','Past cancel', r=>r._past],
   ['tight','Tight', r=>r._tight],
   ['nosupply','No supply', r=>r._flags.includes('NoSupply')],
   ['short','Short', r=>(r.ShortQty||0)>0],
@@ -642,8 +646,8 @@ const COLS=[
   {k:'LineNotes',h:'Notes',f:r=>`<input class="note" data-note="${r.Id}" value="${esc(r.LineNotes||'')}" placeholder="…">`},
 ];
 function flagPills(r){
-  const m={'LFDRisk':'lfd','NotReleased':'notrel','SourcesDisagree':'disagree','NotInReports':'disagree','Late':'late','Late (ERP ETA)':'lateerp','Tight':'tight','Tight (ERP ETA)':'tighterp','Future':'future','ChangedSinceSent':'stale','NoSupply':'nosupply','Short':'short','NoETA':'noeta','Ambiguous':'ambiguous','Landed':'landed','PONotFound':'ponotfound'};
-  const lbl={'LFDRisk':'LFD risk','NotReleased':'Not released','SourcesDisagree':'Reports disagree','NotInReports':'Not in reports','NoSupply':'No supply','NoETA':'No ETA','PONotFound':'PO not found','Late (ERP ETA)':'Late · ERP','Tight (ERP ETA)':'Tight · ERP','ChangedSinceSent':'Changed since sent'};
+  const m={'PastCancel':'past','LFDRisk':'lfd','NotReleased':'notrel','SourcesDisagree':'disagree','NotInReports':'disagree','Late':'late','Late (ERP ETA)':'lateerp','Tight':'tight','Tight (ERP ETA)':'tighterp','Future':'future','ChangedSinceSent':'stale','NoSupply':'nosupply','Short':'short','NoETA':'noeta','Ambiguous':'ambiguous','Landed':'landed','PONotFound':'ponotfound'};
+  const lbl={'PastCancel':'Past cancel','LFDRisk':'LFD risk','NotReleased':'Not released','SourcesDisagree':'Reports disagree','NotInReports':'Not in reports','NoSupply':'No supply','NoETA':'No ETA','PONotFound':'PO not found','Late (ERP ETA)':'Late · ERP','Tight (ERP ETA)':'Tight · ERP','ChangedSinceSent':'Changed since sent'};
   let h=r._flags.map(f=>`<span class="pill ${m[f]||'nosupply'}">${esc(lbl[f]||f)}</span>`).join('');
   if(!r._active) h+='<span class="pill nosupply">Gone</span>';
   return h||'<span class="dim">–</span>';
@@ -696,10 +700,11 @@ const CARDS=[
   {k:'new', l:'New since last report'},
   {k:'lfd', l:'Last free day at risk'},
   {k:'rev', l:'Not reviewed'},
+  {k:'past', l:'Past cancel'},
   {k:'resend', l:'Re-send to buyer'},
 ];
 // change types that are action items, in the order the email and the Master Report tab list them
-const NEW_TYPES={NewLate:'New late',NewTight:'New tight',ETASlipped:'ETA slipped',NewLFDRisk:'LFD at risk',NewNotReleased:'Arrived, not released',
+const NEW_TYPES={NewLate:'New late',NewPastCancel:'Passed its cancel date',NewTight:'New tight',ETASlipped:'ETA slipped',NewLFDRisk:'LFD at risk',NewNotReleased:'Arrived, not released',
   NewDisagree:'Reports disagree',NewNotInReports:'Not on the reports',ChangedAfterSent:'Changed since sent',
   ReviewCleared:'Needs another look',LineReturned:'Back on the ERP report'};
 const NEW_ORDER=Object.keys(NEW_TYPES);
@@ -717,7 +722,7 @@ function runWhen(title){ const m=/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec
 const FLAG_CHANGES={NewLFDRisk:'LFDRisk',NewNotReleased:'NotReleased',NewDisagree:'SourcesDisagree',NewNotInReports:'NotInReports'};
 function changeText(c){
   const lbl=NEW_TYPES[c.ChangeType]||c.ChangeType, det=(c.Detail||'').replace(/\s*\[run [^\]]*\]$/,'');
-  if(FLAG_CHANGES[c.ChangeType]||['ChangedAfterSent','NewLate','NewTight'].includes(c.ChangeType)) return isoShort(`${lbl}: ${det}`);
+  if(FLAG_CHANGES[c.ChangeType]||['ChangedAfterSent','NewLate','NewTight','NewPastCancel'].includes(c.ChangeType)) return isoShort(`${lbl}: ${det}`);
   if(c.ChangeType==='ReviewCleared'||c.ChangeType==='LineReturned') return lbl;
   if(c.ChangeType==='ETASlipped') return isoShort(`${lbl}: ${c.OldValue?c.OldValue+' → ':''}${c.NewValue||''}`);
   return isoShort(`${lbl}: ${c.OldValue?c.OldValue+' → ':''}${c.NewValue||''}${det?` (${det})`:''}`);
@@ -729,7 +734,8 @@ function stillApplies(c, r){
   switch(c.ChangeType){
     case 'ReviewCleared': return r._needsRev;
     case 'ChangedAfterSent': return r._stale;
-    case 'NewLate': return r._late;
+    case 'NewLate': return r._late&&!r._past;
+    case 'NewPastCancel': return r._past;
     case 'NewTight': return r._tight||r._late;
     case 'ETASlipped': return ISO.test(c.OldValue||'')&&r.ETA&&dayNo(r.ETA)>dayNo(c.OldValue+'T12:00:00Z');
     default: return true;
@@ -755,7 +761,8 @@ function sentDiff(r){
 /* One plain sentence of why a line is on the board, most important reason first. */
 function whyParts(r){
   const p=[], w=dayNo(r.WhseDate), c=dayNo(r.CancelDate), erp=r.ETASource==='ERP'?' (ERP-keyed ETA only)':'';
-  if(r._late&&w!=null&&c!=null) p.push(`In warehouse ${ds(r.WhseDate)}, ${plural(w-c,'day')} after cancel${erp}`);
+  if(r._past&&c!=null) p.push(`Cancel date ${ds(r.CancelDate)} passed ${plural(todayNo()-c,'day')} ago — ask the buyer to extend or cancel`);
+  else if(r._late&&w!=null&&c!=null) p.push(`In warehouse ${ds(r.WhseDate)}, ${plural(w-c,'day')} after cancel${erp}`);
   else if(r._tight&&w!=null&&c!=null) p.push(`In warehouse ${ds(r.WhseDate)}, ${w>=c?'on the cancel date':plural(c-w,'day')+' before cancel'}${erp}`);
   if(r._flags.includes('LFDRisk')) lfdOf(r).forEach(x=>p.push(`${x.container} LFD ${ds(x.lfd)} (${rel(x.lfd)}), ${pickupText(x.pickup,x.lfd)}`));
   if(r._flags.includes('NotReleased')) p.push(`${r.Released||'Not released'} at port`);
@@ -769,7 +776,8 @@ function whyParts(r){
 /* Higher = more urgent: LFD soonest, late by most days, at port and not released, tight closest to start, re-send. */
 function urgency(r){
   const t=todayNo(), w=dayNo(r.WhseDate), c=dayNo(r.CancelDate), st=dayNo(r.StartDate); let u=0;
-  if(r._late) u+=1000+Math.min(90,Math.max(0,(w??c??0)-(c??0)));
+  if(r._late&&!r._past) u+=1000+Math.min(90,Math.max(0,(w??c??0)-(c??0)));
+  if(r._past) u+=350+Math.min(60,Math.max(0,t-(c??t)));
   if(r._flags.includes('LFDRisk')){ const ls=lfdOf(r).map(x=>dayNo(x.lfd)).filter(x=>x!=null); if(ls.length) u+=800-50*Math.min(3,Math.max(0,Math.min(...ls)-t)); }
   if(r._flags.includes('NotReleased')) u+=600;
   if(r._tight) u+=400+Math.max(0,60-Math.max(0,(st??t)-t));
@@ -810,7 +818,9 @@ function boardData(){
   act.filter(r=>r._flags.includes('LFDRisk')).forEach(r=>lfdOf(r).forEach(x=>{
     if(!conts.has(x.container)) conts.set(x.container,{...x,lines:[]}); conts.get(x.container).lines.push(r); }));
   return {nb, newRows:sortByUrgency(newRows), lfd:[...conts.values()].sort((a,b)=>(dayNo(a.lfd)??9e9)-(dayNo(b.lfd)??9e9)),
-          rev:sortByUrgency(act.filter(r=>r._needsRev||boardKeep.has(r.Id))),
+          rev:sortByUrgency(act.filter(r=>!r._past&&(r._needsRev||boardKeep.has(r.Id)))),
+          past:act.filter(r=>r._past&&(r._needsRev||boardKeep.has(r.Id)))
+               .sort((a,b)=>(dayNo(a.CancelDate)??9e9)-(dayNo(b.CancelDate)??9e9)||String(a.Customer).localeCompare(String(b.Customer))),
           resend:sortByUrgency(act.filter(r=>r._stale||boardKeep.has(r.Id))), act};
 }
 function buildBoardOptions(){
@@ -838,13 +848,15 @@ function boardRow(r, why){
 const BHEAD='<div class="bhead"><div>Rev · Sent</div><div>Customer · Style</div><div>Window</div><div>Container</div><div>In whse</div><div>Why it is here</div><div></div></div>';
 function paintBoard(){
   const D=boardData();
-  const cnt={new:D.newRows.length, lfd:D.lfd.length, rev:D.rev.filter(r=>r._needsRev).length, resend:D.resend.filter(r=>r._stale).length};
+  const cnt={new:D.newRows.length, lfd:D.lfd.length, rev:D.rev.filter(r=>r._needsRev).length, past:D.past.filter(r=>r._needsRev).length,
+             resend:D.resend.filter(r=>r._stale).length};
   if(!state.card||!CARDS.some(c=>c.k===state.card)) state.card=(CARDS.find(c=>cnt[c.k]>0)||CARDS[2]).k;
   const cut=reportCutoff();
   const subs={
     new: cut?`since ${runWhen(cut)}`:'last 7 days',
     lfd: D.lfd.length?`next: ${rel(D.lfd[0].lfd)} (${ds(D.lfd[0].lfd)})`:'nothing at port near its LFD',
     rev: `${D.rev.filter(r=>r._needsRev&&r._late).length} late · ${D.rev.filter(r=>r._needsRev&&r._tight).length} tight`,
+    past: cnt.past?`oldest cancel ${ds(D.past.filter(r=>r._needsRev)[0].CancelDate)} · ask the buyer`:'none waiting',
     resend: cnt.resend?`oldest sent ${ds(D.resend.filter(r=>r._stale).map(r=>r.SentToBuyerDate).filter(Boolean).sort()[0])}`:'buyers are up to date',
   };
   const focused=document.activeElement&&document.activeElement.classList.contains('card')?document.activeElement.dataset.c:null;
@@ -853,7 +865,7 @@ function paintBoard(){
   $('cards').querySelectorAll('.card').forEach(el=>el.onclick=()=>{ if(state.card!==el.dataset.c){ boardKeep.clear(); state.boardLimit=150; } state.card=el.dataset.c; paintBoard(); syncHash(); });
   if(focused) $('cards').querySelector(`.card[data-c="${focused}"]`).focus();
   const a=D.act;
-  $('strip').innerHTML=`<span><b>${a.filter(r=>r._late).length}</b> late</span><span><b>${a.filter(r=>r._tight).length}</b> tight</span>`+
+  $('strip').innerHTML=`<span><b>${a.filter(r=>r._late&&!r._past).length}</b> late</span><span><b>${a.filter(r=>r._past).length}</b> past cancel</span><span><b>${a.filter(r=>r._tight).length}</b> tight</span>`+
     `<span><b>${a.filter(r=>(r.ShortQty||0)>0).length}</b> short</span><span><b>${a.filter(r=>r._rev).length}</b> reviewed</span>`+
     `<span><b>${a.length}</b> open lines</span><button class="go" id="toLines">See all lines →</button>`;
   $('toLines').onclick=()=>setTab('lines');
@@ -865,7 +877,7 @@ function paintBoard(){
         `<span>${esc(g.status||'')}</span><span>${g.pickup&&dayNo(g.pickup)<=dayNo(g.lfd)?'pickup '+ds(g.pickup):`<b style="color:var(--past)">${pickupText(g.pickup,g.lfd)}</b>`}</span>`+
         `<span class="dim">${plural(ls.length,'line')}${ls.length<g.lines.length?' of '+g.lines.length:''}</span></div>`+ls.map(r=>boardRow(r)).join(''); });
   }else{
-    const all=state.card==='new'?D.newRows:state.card==='rev'?D.rev:D.resend, rows=all.filter(boardFilter); shown=rows.length; total=all.length;
+    const all=state.card==='new'?D.newRows:state.card==='rev'?D.rev:state.card==='past'?D.past:D.resend, rows=all.filter(boardFilter); shown=rows.length; total=all.length;
     const more=rows.length-state.boardLimit;
     html=rows.slice(0,state.boardLimit).map(r=>{ if(state.card!=='new') return boardRow(r);
       const m=D.nb.get(r.Title)||new Map();
@@ -875,7 +887,7 @@ function paintBoard(){
   const filtering=$('bq').value.trim()||$('bCust').value;
   $('boardTitle').textContent=card.l;
   $('boardSub').textContent=filtering?`showing ${shown} of ${total}${$('bCust').value?' · '+$('bCust').value:''}`:subs[card.k];
-  $('boardList').innerHTML=shown?BHEAD+html:`<div class="done">${total?'Nothing matches the search.':'All clear ✓'}<span>${total?'Clear the search or customer filter.':({new:'No new problems since the last report.',lfd:'No container at port is close to its last free day without a pickup.',rev:'Every late, tight or flagged line has been reviewed.',resend:'Nothing has changed since it was sent to a buyer.'})[state.card]}</span></div>`;
+  $('boardList').innerHTML=shown?BHEAD+html:`<div class="done">${total?'Nothing matches the search.':'All clear ✓'}<span>${total?'Clear the search or customer filter.':({new:'No new problems since the last report.',lfd:'No container at port is close to its last free day without a pickup.',rev:'Every late, tight or flagged line has been reviewed.',past:'No open line past its cancel date is waiting for a review.',resend:'Nothing has changed since it was sent to a buyer.'})[state.card]}</span></div>`;
   if($('boardMore')) $('boardMore').onclick=e=>{ e.stopPropagation(); state.boardLimit+=150; paintBoard(); };
   wireMarks($('boardList'), true);
   $('boardList').querySelectorAll('.brow').forEach(el=>{ const open=()=>openDrawer(lines.find(r=>r.Id==el.dataset.id));
@@ -890,7 +902,7 @@ function wireMarks(root, keep){
 }
 
 /* ───────────────────── changes view ───────────────────── */
-const CT_CLASS={ETAFound:'good',ETASlipped:'bad',NewLFDRisk:'bad',NewNotReleased:'warn',NewDisagree:'warn',NewNotInReports:'warn',ReviewCleared:'warn',ShipStatus:'good',NewLate:'bad',CRDPushed:'bad',NoETA:'bad',LineGone:'good',NoLongerLate:'good',Landed:'good',LoadConfirmed:'good',ETADiscrepancy:'warn',ETAMoved:'warn',NewTight:'warn',ChangedAfterSent:'bad',Improved:'good'};
+const CT_CLASS={NewPastCancel:'bad',ETAFound:'good',ETASlipped:'bad',NewLFDRisk:'bad',NewNotReleased:'warn',NewDisagree:'warn',NewNotInReports:'warn',ReviewCleared:'warn',ShipStatus:'good',NewLate:'bad',CRDPushed:'bad',NoETA:'bad',LineGone:'good',NoLongerLate:'good',Landed:'good',LoadConfirmed:'good',ETADiscrepancy:'warn',ETAMoved:'warn',NewTight:'warn',ChangedAfterSent:'bad',Improved:'good'};
 function paintChanges(){
   const ty=$('cType').value, q=$('cq').value.trim().toLowerCase();
   const rows=changes.filter(c=>(!ty||c.ChangeType===ty)&&(!q||[c.Style,c.Customer,c.ImportPO,c.Title].join(' ').toLowerCase().includes(q)));
