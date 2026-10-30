@@ -103,7 +103,7 @@
   .boardbar h3{font-size:15px; font-weight:700; letter-spacing:-.2px}
   .boardbar .sub{font-size:12px; color:var(--muted)}
   .boardbar .spacer{flex:1}
-  .boardbar input{min-width:220px}
+  .boardbar input[type=search]{min-width:220px}
   .blist{border:1px solid var(--edge); border-radius:13px; background:rgba(255,255,255,.55); overflow:auto; max-height:max(340px,calc(100vh - 360px))}
   .brow .cl{display:none}
   .card:focus-visible,.brow:focus-visible{outline:2px solid var(--accentink); outline-offset:-2px}
@@ -126,6 +126,9 @@
   .cgroup{display:flex; gap:16px; flex-wrap:wrap; align-items:baseline; padding:10px 14px; background:rgba(255,255,255,.75);
     border-bottom:1px solid var(--grid); font-size:12.5px; position:sticky; top:31px; z-index:1}
   .cgroup b{font-size:13px} .cgroup .lfdsoon{font-size:13px} .cgroup .dim{color:var(--muted)}
+  .sechdr{padding:12px 14px 8px; font-size:13px; font-weight:700; border-bottom:1px solid var(--grid); background:rgba(240,245,251,.9)}
+  .sechdr span{font-weight:500; color:var(--muted); margin-left:6px}
+  .boardbar .chk{display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--muted); cursor:pointer}
   .done{padding:46px 20px; text-align:center; color:var(--landed); font-size:14px; font-weight:600}
   .done span{display:block; font-size:12.5px; color:var(--muted); font-weight:400; margin-top:6px}
   @media(max-width:1040px){ .cards{grid-template-columns:repeat(2,minmax(0,1fr))} .bhead{display:none} .blist{max-height:none}
@@ -272,6 +275,8 @@
         <div class="spacer"></div>
         <input type="search" id="bq" placeholder="Search customer, style, PO, container…" aria-label="Search the board">
         <select id="bCust" aria-label="Customer"><option value="">All customers</option></select>
+        <label class="chk" style="padding:0"><input type="checkbox" id="bGroup"> Group by customer</label>
+        <button class="btn sm" id="bExport" title="Save the lines shown below to Excel">Export this list</button>
       </div>
       <div class="blist" id="boardList"></div>
     </div>
@@ -442,7 +447,7 @@ async function patchItem(list, id, fields){
 
 /* ───────────────────── data ───────────────────── */
 let lines=[], changes=[], runs=[], selected=null;
-const state={tab:'board', card:null, boardLimit:150, flags:new Map(), sort:{k:'StartDate',d:1}}; // flags: chip -> 1 include, -1 exclude
+const state={tab:'board', card:null, boardLimit:150, group:(()=>{ try{ return localStorage.getItem('ls-group')!=='0'; }catch(e){ return true; } })(), flags:new Map(), sort:{k:'StartDate',d:1}}; // flags: chip -> 1 include, -1 exclude
 
 const LINE_SEL="Modified,Title,Customer,OrdNo,CustPO,Style,QtyOrd,QtyAlc,QtyShp,StatusText,StatusKind,ShortQty,BookedQty,ImportPO,RoundNo,Container,Factory,CRD,ShipBy,ETD,ETA,ETASource,KeyedETA,StartDate,CancelDate,Flags,IsLate,SheetLoc,Landed,FirstSeen,LastChanged,Active,SentToBuyer,SentToBuyerDate,SentToBuyerBy,LineNotes,IsTight,ETAClass,IsFuture,SentETA,SentCRD,SentClass,SentShort,SentStale,ShipStatus,WhseDate,LFD,PickupDate,DeliveryDate,Released,ShipNote,ReviewSig,Reviewed,ReviewedDate,ReviewedBy,ReviewedSig,LFDDetail";
 const CHG_SEL="Title,RunDate,RunTitle,ChangeType,ChangedField,OldValue,NewValue,Customer,Style,ImportPO,Detail";
@@ -753,7 +758,8 @@ function lfdOf(r){ const ls=lfdList(r); return ls.length?ls:(r.LFD?[{container:(
 function sentDiff(r){
   const d=[];
   if(d10(r.SentETA)!==d10(r.ETA)) d.push(`ETA ${ds(r.SentETA)||'none'} → ${ds(r.ETA)||'none'}`);
-  if((r.SentClass||'')!==(r.ETAClass||'')) d.push(`${r.SentClass||'no class'} → ${r.ETAClass||'no ETA'}`);
+  const lateOrNot=c=>c==='Late'?'Late':c?'in window':'';
+  if(lateOrNot(r.SentClass)!==lateOrNot(r.ETAClass)) d.push(`${r.SentClass||'no class'} → ${r.ETAClass||'no ETA'}`);
   if(d10(r.SentCRD)!==d10(r.CRD)) d.push(`CRD ${ds(r.SentCRD)||'none'} → ${ds(r.CRD)||'none'}`);
   if((r.SentShort||0)!==(r.ShortQty||0)) d.push(`short ${r.SentShort||0} → ${r.ShortQty||0}`);
   return `Changed since sent ${ds(r.SentToBuyerDate)}`+(d.length?': '+d.join(', '):'');
@@ -761,7 +767,7 @@ function sentDiff(r){
 /* One plain sentence of why a line is on the board, most important reason first. */
 function whyParts(r){
   const p=[], w=dayNo(r.WhseDate), c=dayNo(r.CancelDate), erp=r.ETASource==='ERP'?' (ERP-keyed ETA only)':'';
-  if(r._past&&c!=null) p.push(`Cancel date ${ds(r.CancelDate)} passed ${plural(todayNo()-c,'day')} ago — ask the buyer to extend or cancel`);
+  if(r._past&&c!=null) p.push(`Cancel date ${ds(r.CancelDate)} passed ${plural(todayNo()-c,'day')} ago — `+(pastOld(r)?'close or cancel it in the ERP':'ask the buyer to extend or cancel'));
   else if(r._late&&w!=null&&c!=null) p.push(`In warehouse ${ds(r.WhseDate)}, ${plural(w-c,'day')} after cancel${erp}`);
   else if(r._tight&&w!=null&&c!=null) p.push(`In warehouse ${ds(r.WhseDate)}, ${w>=c?'on the cancel date':plural(c-w,'day')+' before cancel'}${erp}`);
   if(r._flags.includes('LFDRisk')) lfdOf(r).forEach(x=>p.push(`${x.container} LFD ${ds(x.lfd)} (${rel(x.lfd)}), ${pickupText(x.pickup,x.lfd)}`));
@@ -833,6 +839,40 @@ function boardFilter(r){
   return (!cu||r.Customer===cu)&&(!q||r._hay.includes(q));
 }
 const colOf=k=>COLS.find(c=>c.k===k);
+const PAST_OLD_DAYS=14;   // same cut as the Function's PAST_CANCEL_OLD_DAYS
+const pastOld=r=>{ const c=dayNo(r.CancelDate); return c!=null&&todayNo()-c>PAST_OLD_DAYS; };
+/* customers in the order of their first (most urgent) line; lines keep their order inside */
+function byCustomer(rows){ const m=new Map(); rows.forEach(r=>{ const k=r.Customer||'—'; if(!m.has(k)) m.set(k,[]); m.get(k).push(r); });
+  return [...m].map(([name,rows])=>({name,rows})); }
+function groupNote(rows){   // "4 lines · 2 late · 1 past cancel · 1 to re-send"
+  const bits=[plural(rows.length,'line')];
+  [['late',r=>r._late&&!r._past],['past cancel',r=>r._past],['tight',r=>r._tight],['to re-send',r=>r._stale],['short',r=>(r.ShortQty||0)>0]]
+    .forEach(([l,f])=>{ const k=rows.filter(f).length; if(k) bits.push(`${k} ${l}`); });
+  return bits.join(' · ');
+}
+/* the lines the current card shows (search and customer filter applied), for Export this list */
+function boardLines(){
+  const D=boardData();
+  if(state.card==='lfd') return [...new Set(D.lfd.flatMap(g=>g.lines))].filter(boardFilter);
+  return (state.card==='new'?D.newRows:state.card==='rev'?D.rev:state.card==='past'?D.past:D.resend).filter(boardFilter);
+}
+function exportBoard(){
+  if(typeof XLSX==='undefined'){ toast('Excel library did not load — check the network'); return; }
+  const rows=boardLines(); if(!rows.length){ toast('Nothing to export'); return; }
+  const asDate=s=>{ if(!s) return null; const d=new Date(d10(s)+'T00:00:00'); return isNaN(d)?null:d; };
+  const t=todayNo(), card=CARDS.find(c=>c.k===state.card);
+  const head=['Customer','Style','Cust PO','Order','Import PO','Start','Cancel','Days past cancel','Status','Container','ETA','ETA source','In warehouse','Why it is here','Reviewed','Sent to buyer','Notes'];
+  const data=rows.map(r=>[r.Customer||'', r.Style||'', r.CustPO||'', r.OrdNo||'', r.ImportPO||'', asDate(r.StartDate), asDate(r.CancelDate),
+    r._past&&dayNo(r.CancelDate)!=null?t-dayNo(r.CancelDate):'', r.ShipStatus||'', r.Container||'', asDate(r.ETA), r.ETASource||'', asDate(r.WhseDate),
+    whyParts(r).join(' · '), r._rev?asDate(r.ReviewedDate):null, r._sent?asDate(r.SentToBuyerDate):null, r.LineNotes||'']);
+  const ws=XLSX.utils.aoa_to_sheet([head].concat(data),{cellDates:true});
+  const dateCols=[5,6,10,12,14,15], rng=XLSX.utils.decode_range(ws['!ref']);
+  for(let R=1;R<=rng.e.r;R++) dateCols.forEach(C=>{ const cell=ws[XLSX.utils.encode_cell({r:R,c:C})]; if(cell&&cell.v instanceof Date){ cell.t='d'; cell.z='m/d/yyyy'; } });
+  ws['!cols']=head.map((h,i)=>({wch:i===13?60:Math.max(10,h.length+2)})); ws['!autofilter']={ref:ws['!ref']};
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, card.l.slice(0,31));
+  const who=$('bCust').value?` - ${$('bCust').value}`:'';
+  XLSX.writeFile(wb, `Late and Short - ${card.l}${who} ${new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'})}.xlsx`.replace(/[\\/:*?"<>|]/g,''));
+}
 function boardRow(r, why){
   const parts=why||whyParts(r), conts=(r.Container||'').split(',').map(x=>x.trim()).filter(Boolean);
   const w=dayNo(r.WhseDate);
@@ -856,7 +896,7 @@ function paintBoard(){
     new: cut?`since ${runWhen(cut)}`:'last 7 days',
     lfd: D.lfd.length?`next: ${rel(D.lfd[0].lfd)} (${ds(D.lfd[0].lfd)})`:'nothing at port near its LFD',
     rev: `${D.rev.filter(r=>r._needsRev&&r._late).length} late · ${D.rev.filter(r=>r._needsRev&&r._tight).length} tight`,
-    past: cnt.past?`oldest cancel ${ds(D.past.filter(r=>r._needsRev)[0].CancelDate)} · ask the buyer`:'none waiting',
+    past: cnt.past?(()=>{ const p=D.past.filter(r=>r._needsRev), o=p.filter(pastOld).length; return `${p.length-o} to ask the buyer · ${o} to close in the ERP`; })():'none waiting',
     resend: cnt.resend?`oldest sent ${ds(D.resend.filter(r=>r._stale).map(r=>r.SentToBuyerDate).filter(Boolean).sort()[0])}`:'buyers are up to date',
   };
   const focused=document.activeElement&&document.activeElement.classList.contains('card')?document.activeElement.dataset.c:null;
@@ -878,11 +918,26 @@ function paintBoard(){
         `<span class="dim">${plural(ls.length,'line')}${ls.length<g.lines.length?' of '+g.lines.length:''}</span></div>`+ls.map(r=>boardRow(r)).join(''); });
   }else{
     const all=state.card==='new'?D.newRows:state.card==='rev'?D.rev:state.card==='past'?D.past:D.resend, rows=all.filter(boardFilter); shown=rows.length; total=all.length;
-    const more=rows.length-state.boardLimit;
-    html=rows.slice(0,state.boardLimit).map(r=>{ if(state.card!=='new') return boardRow(r);
+    const rowHtml=r=>{ if(state.card!=='new') return boardRow(r);
       const m=D.nb.get(r.Title)||new Map();
-      return boardRow(r, NEW_ORDER.filter(t=>m.has(t)).map(t=>changeText(m.get(t)))); }).join('')+
-      (more>0?`<div class="done" style="padding:16px"><button class="btn sm" id="boardMore">Show ${Math.min(more,150)} more (${more} not shown)</button></div>`:'');
+      return boardRow(r, NEW_ORDER.filter(t=>m.has(t)).map(t=>changeText(m.get(t)))); };
+    // past cancel comes in two parts: recently passed (ask the buyer) and long past (close or cancel in the ERP)
+    const parts=state.card==='past'
+      ? [{title:'Ask the buyer to extend or cancel', note:`passed in the last ${PAST_OLD_DAYS} days`, rows:rows.filter(r=>!pastOld(r))},
+         {title:'Close or cancel in the ERP', note:`passed more than ${PAST_OLD_DAYS} days ago`, rows:rows.filter(pastOld)}]
+      : [{title:'', rows}];
+    let left=state.boardLimit;
+    for(const part of parts){
+      if(!part.rows.length) continue;
+      if(part.title) html+=`<div class="sechdr">${esc(part.title)}<span>${esc(part.note)} · ${plural(part.rows.length,'line')}</span></div>`;
+      for(const g of (state.group?byCustomer(part.rows):[{name:'',rows:part.rows}])){
+        if(left<=0) break;
+        if(g.name) html+=`<div class="cgroup"><b>${esc(g.name)}</b><span class="dim">${esc(groupNote(g.rows))}</span></div>`;
+        const take=g.rows.slice(0,left); left-=take.length; html+=take.map(rowHtml).join('');
+      }
+    }
+    const more=rows.length-state.boardLimit;
+    if(more>0) html+=`<div class="done" style="padding:16px"><button class="btn sm" id="boardMore">Show ${Math.min(more,150)} more (${more} not shown)</button></div>`;
   }
   const filtering=$('bq').value.trim()||$('bCust').value;
   $('boardTitle').textContent=card.l;
@@ -1119,6 +1174,9 @@ function paint(){ if(state.tab==='board') paintBoard(); else if(state.tab==='lin
 ['q','fCust','fFact','fRound','fSrc','fShip','showGone'].forEach(id=>$(id).addEventListener('input',()=>{ paintLines(); syncHash(); }));
 ['cType','cq'].forEach(id=>$(id).addEventListener('input',paintChanges));
 ['bq','bCust'].forEach(id=>$(id).addEventListener('input',()=>{ state.boardLimit=150; paintBoard(); }));
+$('bGroup').checked=state.group;
+$('bGroup').onchange=()=>{ state.group=$('bGroup').checked; try{ localStorage.setItem('ls-group', state.group?'1':'0'); }catch(e){} paintBoard(); };
+$('bExport').onclick=exportBoard;
 $('clearF').onclick=()=>{ ['q','fCust','fFact','fRound','fSrc','fShip'].forEach(id=>$(id).value=''); $('showGone').checked=false; state.flags.clear(); paintCounters(); paintLines(); syncHash(); };
 
 initAuth();
