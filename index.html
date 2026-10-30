@@ -198,6 +198,7 @@
   input.note{width:220px; font-size:12px; padding:4px 8px; border-radius:8px; border:1px solid transparent; background:transparent}
   input.note:hover{border-color:var(--edge); background:rgba(255,255,255,.7)}
   input.note:focus{border-color:var(--edge); background:#fff}
+  input.note.unsaved:not(:focus){border-color:var(--amb)}
   .empty{padding:40px; text-align:center; color:var(--muted); font-size:13.5px}
 
   /* changes view */
@@ -456,6 +457,8 @@ const CHG_SEL="Title,RunDate,RunTitle,ChangeType,ChangedField,OldValue,NewValue,
 const RUN_SEL="Title,RunDate,Trigger,Emailed,Reported,TrackerModified,ReportFile,ForwarderFile,DrayageFile,LinesRead,LateCount,NoSupplyCount,ShortCount,NoETACount,ChangeCount,RunStatus,ErrorText,DurationSec,IssueCount,Issues";
 
 const noteSaves={};   // Id -> {text, at}: notes saved while a reload was in flight
+const noteDrafts={};   // Id -> text typed in a note box but not saved yet: kept through redraws and reloads
+const notePending=new Set();   // notes refused while the saved copy was on screen: saved once the update is in
 /* Saved copy + changed-only loading.
    Lines are never deleted (a line gone from the ERP gets Active=false) and the change log only grows, so between full
    loads the page asks SharePoint only for lines modified since the last load and for the change rows of runs it has not
@@ -517,7 +520,7 @@ async function load(){
     idb.set(cacheKey(), {shape:CACHE_SHAPE, at:Date.now(), fullAt:full?Date.now():cache.fullAt, changeDays:days,
                          lines:L, changes:C, runs:R, maxMod:maxOf(L,'Modified')});
     if(changeDays>days) C=mergeById(C, changes);   // the Changes tab fetched the longer history meanwhile: keep it
-    apply(L, C, R, t0); staleView=false;
+    apply(L, C, R, t0); staleView=false; flushNotes();
   }catch(e){
     if($('updating')) $('updating').textContent='could not update ('+e.message+') — press Refresh to try again';
     else $('asof').innerHTML='<span class="warn">Could not read the lists: '+esc(e.message)+'</span>';
@@ -525,19 +528,22 @@ async function load(){
 }
 function mergeById(a, b){ const m=new Map(a.map(x=>[x.Id,x])); (b||[]).forEach(x=>{ if(!m.has(x.Id)) m.set(x.Id,plain(x)); }); return [...m.values()]; }
 function apply(L, C, R, t0){
-  boardKeep.clear();
+  const a=document.activeElement, typing=a&&a.matches&&a.matches('#boardList input[data-note]')?+a.dataset.note:null, old=typing!=null&&lines.find(x=>x.Id===typing);
+  const kept=typing==null?null:boardKeep.has(typing)?boardKeep.get(typing):old?urgency(old):0;
+  boardKeep.clear(); if(kept!=null) boardKeep.set(typing, kept);   // the row being typed in keeps its place
   lines=L.map(x=>normLine({...x})); changes=C.map(x=>({...x})).sort((a,b)=>b.Id-a.Id); runs=R.map(x=>({...x})).sort((a,b)=>b.Id-a.Id).slice(0,60);
   lines.forEach(x=>{ const n=noteSaves[x.Id], m=markSaves[x.Id];
     if(n&&n.at>=t0) x.LineNotes=n.text;
     if(m&&m.at>=t0) Object.assign(x, m.fields);
     if((n&&n.at>=t0)||(m&&m.at>=t0)) normLine(x); });
-  const a=document.activeElement, nid=a&&a.matches&&a.matches('input[data-note]')?a.dataset.note:null, nbox=nid&&a.closest('#boardList,#linesTbl'), nv=nid?a.value:'', ns=nid?a.selectionStart:0, nedit=!!nid&&a.value!==a._v0;
+  for(const id in noteDrafts){ const x=lines.find(y=>y.Id==id); if(!x||noteDrafts[id].trim()===(x.LineNotes||'')) delete noteDrafts[id]; }
   if(selected){ const fresh=lines.find(x=>x.Id===selected.Id), typed=$('dNote').value, dirty=typed.trim()!==(selected.LineNotes||'');
     if(fresh){ openDrawer(fresh); if(dirty) $('dNote').value=typed; } else closeDrawer(); }
   buildFilterOptions(); buildBoardOptions(); paintAsOf(); paintIssueBadge(); if(!hashApplied){ applyHash(); hashApplied=true; } paintCounters(); paint();
-  if(nid){ const inp=nbox&&$(nbox.id).querySelector(`input[data-note="${nid}"]`); if(inp){ inp.focus(); if(nedit){ inp.value=nv; inp.setSelectionRange(ns,ns); } }
-            else if(nedit) setTimeout(()=>saveNote(lines.find(x=>x.Id==nid), nv)); }   // after the caller clears staleView
 }
+/* notes refused while the saved copy was still on screen: save them now the latest data is in */
+function flushNotes(){ const a=document.activeElement;
+  notePending.forEach(id=>{ const r=lines.find(x=>x.Id===id), t=noteDrafts[id]; if(r&&t!=null&&!(a&&a.dataset&&a.dataset.note==id)) saveNote(r,t); }); notePending.clear(); }
 /* marks made on the saved copy before it is updated would record yesterday's ETA / class / review signature */
 function waitForUpdate(repaint){
   if(!staleView) return false;
@@ -625,7 +631,7 @@ function buildFilterOptions(){
 }
 
 /* ───────────────────── lines table ───────────────────── */
-const noteBox=(r,ph)=>`<input class="note" data-note="${r.Id}" value="${esc(r.LineNotes||'')}" title="${esc(r.LineNotes||'')}" placeholder="${ph}" aria-label="Note for ${esc(r.Style||'')}">`;
+const noteBox=(r,ph)=>`<input class="note${r.Id in noteDrafts?' unsaved':''}" data-note="${r.Id}" value="${esc(noteDrafts[r.Id]??(r.LineNotes||''))}" title="${esc(r.LineNotes||'')}" placeholder="${ph}" aria-label="Note for ${esc(r.Style||'')}">`;
 const COLS=[
   {k:'SentToBuyer',h:'Buyer',f:r=>`<label class="sent${r._stale?' stale':''}" title="${r._stale?'Changed since sent '+fd(r.SentToBuyerDate)+' — click to mark re-sent':r._sent?'Sent '+fd(r.SentToBuyerDate)+' by '+esc(r.SentToBuyerBy||'')+' — click to clear':'Mark as sent to buyer'}"><input type="checkbox" data-sent="${r.Id}" ${r._sent?'checked':''}> ${r._stale?'<span style="color:#b4452f">re-send</span>':r._sent?fd(r.SentToBuyerDate):''}</label>`},
   {k:'Reviewed',h:'Reviewed',f:r=>`<label class="rev" title="${r._rev?'Reviewed '+fd(r.ReviewedDate)+' by '+esc(r.ReviewedBy||'')+' — click to clear':r._needsRev&&r.ReviewedBy?'Changed since '+esc(r.ReviewedBy)+' reviewed it '+fd(r.ReviewedDate)+' — look again':'Mark as reviewed'}"><input type="checkbox" data-rev="${r.Id}" ${r._rev?'checked':''}> ${r._rev?fd(r.ReviewedDate):r._needsRev&&r.ReviewedBy?'<span style="color:#b4452f">again</span>':''}</label>`},
@@ -696,19 +702,31 @@ function paintLines(){
   const tb=rows.length?rows.map(r=>`<tr class="row${r._late?' late':r._tight?' tight':''}${!r._active?' inactive':''}${selected&&selected.Id===r.Id?' sel':''}" data-id="${r.Id}">`+
     COLS.map(c=>`<td class="${c.n?'num':''}">${c.f?c.f(r):(c.d?fd(r[c.k]):esc(r[c.k]))||'<span class="dim">–</span>'}</td>`).join('')+'</tr>').join('')
     :`<tr><td colspan="${COLS.length}" class="empty">Nothing matches. Clear a filter or wait for the next run.</td></tr>`;
-  const t=$('linesTbl'); t.tHead.innerHTML=th;
+  const t=$('linesTbl'); t.tHead.innerHTML=th; const nf=noteFocus(t.tBodies[0]);
   repainting=true; try{ t.tBodies[0].innerHTML=tb; } finally{ repainting=false; }   // Chrome fires blur on the removed inputs
   t.tHead.querySelectorAll('th').forEach(el=>el.onclick=()=>{ const k=el.dataset.k; state.sort=state.sort.k===k?{k,d:-state.sort.d}:{k,d:1}; paintLines(); });
-  t.tBodies[0].querySelectorAll('tr.row').forEach(el=>el.onclick=()=>openDrawer(lines.find(r=>r.Id==el.dataset.id)));
+  t.tBodies[0].querySelectorAll('tr.row').forEach(el=>el.onclick=()=>{ if(!typingIn(el)) openDrawer(lines.find(r=>r.Id==el.dataset.id)); });
   wireMarks(t.tBodies[0]);
-  wireNotes(t.tBodies[0]);
+  wireNotes(t.tBodies[0]); noteRefocus(t.tBodies[0], nf);
 }
-/* note boxes on the board and in the table: Enter or leaving the box saves, Esc puts the old text back */
+/* note boxes on the board and in the table: Enter or leaving the box saves, Esc puts the saved text back */
 function wireNotes(root){
-  root.querySelectorAll('input[data-note]').forEach(inp=>{ inp.onclick=e=>e.stopPropagation();
-    inp.onkeydown=e=>{ if(e.key==='Enter') inp.blur(); else if(e.key==='Escape'){ e.stopPropagation(); inp.value=inp._v0; inp.blur(); } };
-    inp.onfocus=()=>inp._v0=inp.value;
-    inp.onblur=()=>{ if(!repainting&&inp.value!==inp._v0) saveNote(lines.find(r=>r.Id==inp.dataset.note), inp.value); }; });
+  root.querySelectorAll('input[data-note]').forEach(inp=>{ const id=inp.dataset.note, line=()=>lines.find(r=>r.Id==id);
+    inp.onclick=e=>e.stopPropagation();
+    inp.oninput=()=>{ const r=line(); if(r&&inp.value.trim()===(r.LineNotes||'')) delete noteDrafts[id]; else noteDrafts[id]=inp.value; inp.classList.toggle('unsaved', id in noteDrafts); };
+    inp.onkeydown=e=>{ if(e.key==='Enter') inp.blur();
+      else if(e.key==='Escape'){ e.stopPropagation(); delete noteDrafts[id]; const r=line(); inp.value=(r&&r.LineNotes)||''; inp.classList.remove('unsaved'); inp.blur(); } };
+    inp.onblur=()=>{ if(!repainting) saveNote(line(), inp.value); }; });
+}
+const typingIn=el=>{ const a=document.activeElement; return !!a&&!!a.matches&&a.matches('input[data-note]')&&el.contains(a); };
+/* a redraw keeps the note box being typed in: same line, same copy, same cursor (the text is in noteDrafts) */
+function noteFocus(root){ const a=document.activeElement; if(!a||!a.matches||!a.matches('input[data-note]')||!root.contains(a)) return null;
+  return {id:a.dataset.note, i:[...root.querySelectorAll(`input[data-note="${a.dataset.note}"]`)].indexOf(a), s:a.selectionStart, e:a.selectionEnd}; }
+function noteRefocus(root, f){
+  if(!f) return; const all=root.querySelectorAll(`input[data-note="${f.id}"]`), inp=all[f.i]||all[0];
+  if(inp){ inp.focus(); inp.setSelectionRange(f.s,f.e); return; }
+  const r=lines.find(x=>x.Id==f.id);   // its row left this list: finish the note in the side panel
+  if(r) setTimeout(()=>{ openDrawer(r); const dn=$('dNote'), n=dn.value.length; dn.focus(); dn.setSelectionRange(n,n); });
 }
 
 /* ───────────────────── action board ───────────────────── */
@@ -955,11 +973,13 @@ function paintBoard(){
   const filtering=$('bq').value.trim()||$('bCust').value;
   $('boardTitle').textContent=card.l;
   $('boardSub').textContent=filtering?`showing ${shown} of ${total}${$('bCust').value?' · '+$('bCust').value:''}`:subs[card.k];
+  const nf=noteFocus($('boardList'));
   repainting=true; try{ $('boardList').innerHTML=shown?BHEAD+html:`<div class="done">${total?'Nothing matches the search.':'All clear ✓'}<span>${total?'Clear the search or customer filter.':({new:'No new problems since the last report.',lfd:'No container at port is close to its last free day without a pickup.',rev:'Every late, tight or flagged line has been reviewed.',past:'No open line past its cancel date is waiting for a review.',resend:'Nothing has changed since it was sent to a buyer.'})[state.card]}</span></div>`; } finally{ repainting=false; }
   if($('boardMore')) $('boardMore').onclick=e=>{ e.stopPropagation(); state.boardLimit+=150; paintBoard(); };
   wireMarks($('boardList'), true); wireNotes($('boardList'));
   $('boardList').querySelectorAll('.brow').forEach(el=>{ const open=()=>openDrawer(lines.find(r=>r.Id==el.dataset.id));
-    el.onclick=open; el.onkeydown=e=>{ if((e.key==='Enter'||e.key===' ')&&e.target===el){ e.preventDefault(); open(); } }; });
+    el.onclick=()=>{ if(!typingIn(el)) open(); }; el.onkeydown=e=>{ if((e.key==='Enter'||e.key===' ')&&e.target===el){ e.preventDefault(); open(); } }; });
+  noteRefocus($('boardList'), nf);
 }
 /* checkbox wiring shared by the board and the All lines table */
 function wireMarks(root, keep){
@@ -1031,8 +1051,8 @@ function openDrawer(r){
   $('dOrder').innerHTML=kv([['Order',esc(r.OrdNo)],['Customer PO',esc(r.CustPO)],['Start → Cancel',fd(r.StartDate)+' → '+fd(r.CancelDate)],['Ordered / allocated',`${r.QtyOrd??''} / ${r.QtyAlc??''}`+(r.QtyShp?` (shipped ${r.QtyShp})`:'')],['ERP status',esc(r.StatusText)],['Short',r.ShortQty?`<b style="color:var(--short)">${r.ShortQty}</b>`:''],['ERP keyed ETA',r.KeyedETA?(r._disc?`<span class="disc">${fd(r.KeyedETA)} — ${esc((r.ETASource||'').toLowerCase())} says ${fd(r.ETA)}</span>`:fd(r.KeyedETA)):'']]);
   $('dSupply').innerHTML=kv([['Import PO',esc(r.ImportPO)],['Sheet',esc(r.SheetLoc)],['Round',esc(r.RoundNo)],['Container',esc(r.Container)],['Factory',esc(r.Factory)],['Booked qty (style)',r.BookedQty??''],['Ship by',fd(r.ShipBy)],['CRD',fd(r.CRD)],['ETD',fd(r.ETD)],['ETA used',r.ETA?fd(r.ETA)+srcTag(r):''],['First seen',fd(r.FirstSeen)],['Last changed',fd(r.LastChanged)]]);
   $('dShip').innerHTML=kv([['Status',shipTag(r)],['Port ETA',r.ETA?fd(r.ETA)+srcTag(r):''],['In our warehouse',fd(r.WhseDate)],['Last free day',r.LFD?`<span class="${r._lfdSoon?'lfdsoon':''}">${fd(r.LFD)}</span>`:''],['Pickup',fd(r.PickupDate)],['Delivery',fd(r.DeliveryDate)],['Released',esc(r.Released)],['Note',r.ShipNote?`<span class="disc">${esc(r.ShipNote)}</span>`:'']]);
-  $('dNote').value=r.LineNotes||''; $('dNote')._v0=$('dNote').value; $('dNote').onfocus=()=>$('dNote')._v0=$('dNote').value;
-  $('dNote').onblur=()=>{ if($('dNote').value!==$('dNote')._v0) saveNote(r,$('dNote').value); };
+  $('dNote').value=noteDrafts[r.Id]??(r.LineNotes||''); $('dNote')._v0=$('dNote').value; $('dNote').onfocus=()=>$('dNote')._v0=$('dNote').value;
+  $('dNote').onblur=()=>saveNote(r,$('dNote').value);
   paintSentState(r); paintRevState(r);
   const hist=changes.filter(c=>c.Title===r.Title);
   $('dHist').innerHTML=hist.length?hist.map(c=>`<div><span class="d">${fd(c.RunDate)}</span><span class="ct ${CT_CLASS[c.ChangeType]||''}">${esc(c.ChangeType)}</span> ${c.OldValue?esc(c.OldValue)+' → ':''}${esc(c.NewValue)}${c.Detail?` <span class="dim">(${esc(c.Detail)})</span>`:''}</div>`).join(''):'<div class="dim">No changes logged for this line.</div>';
@@ -1080,15 +1100,17 @@ async function setSent(r, on){
   paintCounters(); paint(); if(selected&&selected.Id===r.Id){ paintSentState(r); $('dFlags').innerHTML=flagPills(r); }
 }
 async function saveNote(r, text){
-  if(!r) return; text=(text||'').trim(); if(text===(r.LineNotes||'')) return;
-  if(waitForUpdate(false)) return;   // the typed text stays in the box; leaving it again saves
+  if(!r) return; const marks=()=>document.querySelectorAll(`input[data-note="${r.Id}"]`).forEach(ti=>ti.classList.toggle('unsaved', r.Id in noteDrafts));
+  text=(text||'').trim(); if(text===(r.LineNotes||'')){ delete noteDrafts[r.Id]; marks(); return; }
+  if(staleView){ notePending.add(r.Id); marks(); toast('Still updating to the latest data — the note will be saved when it is in'); return; }
   try{ await patchItem(LISTS.lines, r.Id, {LineNotes:text}); noteSaves[r.Id]={text, at:Date.now()};
        const cur=lines.find(x=>x.Id===r.Id)||r; cur.LineNotes=text; normLine(cur); if(cur!==r){ r.LineNotes=text; normLine(r); }
        const dn=$('dNote');   // no full repaint: keeps focus. The board and the table each have a box for the line
-       document.querySelectorAll(`input[data-note="${r.Id}"]`).forEach(ti=>{ if(ti!==document.activeElement||ti.value===ti._v0){ ti.value=text; ti._v0=text; } ti.title=text; });
+       if(noteDrafts[r.Id]!=null&&noteDrafts[r.Id].trim()===text) delete noteDrafts[r.Id];
+       document.querySelectorAll(`input[data-note="${r.Id}"]`).forEach(ti=>{ if(ti!==document.activeElement) ti.value=noteDrafts[r.Id]??text; ti.title=text; }); marks();
        if(selected&&selected.Id===r.Id&&(document.activeElement!==dn||dn.value===dn._v0)){ dn.value=text; dn._v0=text; }
        toast('Note saved'); }
-  catch(e){ toast('Could not save note: '+e.message); }   // the typed text stays where it was
+  catch(e){ marks(); toast('Could not save note: '+e.message+' — the text is kept; leave the box again to retry'); }
 }
 
 /* ───────────────────── refresh now (kick the Function, wait for its run row) ───────────────────── */
