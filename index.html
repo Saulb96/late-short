@@ -107,7 +107,7 @@
   .blist{border:1px solid var(--edge); border-radius:13px; background:rgba(255,255,255,.55); overflow:auto; max-height:max(340px,calc(100vh - 360px))}
   .brow .cl{display:none}
   .card:focus-visible,.brow:focus-visible{outline:2px solid var(--accentink); outline-offset:-2px}
-  .bhead,.brow{display:grid; grid-template-columns:76px minmax(160px,1.25fr) 96px 128px 84px minmax(240px,2.6fr) 22px; gap:12px; align-items:center; padding:9px 14px}
+  .bhead,.brow{display:grid; grid-template-columns:76px minmax(150px,1.2fr) 92px 120px 80px minmax(200px,2fr) minmax(170px,1.4fr); gap:12px; align-items:center; padding:9px 14px}
   .bhead{position:sticky; top:0; z-index:2; background:rgba(240,245,251,.97); font-size:9.5px; font-weight:700; text-transform:uppercase;
     letter-spacing:.1em; color:var(--muted); border-bottom:1px solid var(--grid)}
   .brow{border-bottom:1px solid var(--grid); cursor:pointer; font-size:12.5px}
@@ -122,7 +122,8 @@
   .brow .why{line-height:1.45}
   .brow .why .lead{font-weight:600}
   .brow .why .dot{color:var(--muted)}
-  .brow .nt{color:var(--muted); text-align:center}
+  .brow .bn{min-width:0}
+  .brow input.note{width:100%; box-sizing:border-box; border-color:var(--grid); background:rgba(255,255,255,.6); cursor:text}
   .cgroup{display:flex; gap:16px; flex-wrap:wrap; align-items:baseline; padding:10px 14px; background:rgba(255,255,255,.75);
     border-bottom:1px solid var(--grid); font-size:12.5px; position:sticky; top:31px; z-index:1}
   .cgroup b{font-size:13px} .cgroup .lfdsoon{font-size:13px} .cgroup .dim{color:var(--muted)}
@@ -131,9 +132,10 @@
   .boardbar .chk{display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--muted); cursor:pointer}
   .done{padding:46px 20px; text-align:center; color:var(--landed); font-size:14px; font-weight:600}
   .done span{display:block; font-size:12.5px; color:var(--muted); font-weight:400; margin-top:6px}
-  @media(max-width:1040px){ .cards{grid-template-columns:repeat(2,minmax(0,1fr))} .bhead{display:none} .blist{max-height:none}
+  @media(max-width:1040px){ .cards{grid-template-columns:repeat(2,minmax(0,1fr))} }
+  @media(max-width:1140px){ .bhead{display:none} .blist{max-height:none}
     .brow .cl{display:inline; font-size:10.5px; color:var(--muted); font-weight:500} .brow .ck{display:flex; align-items:center; gap:6px}
-    .brow{display:flex; flex-wrap:wrap; gap:4px 16px} .brow>div:nth-child(2),.brow .why{flex-basis:100%} .brow .checks{flex-basis:100%; flex-direction:row; gap:14px} .brow .nt{display:none} .cgroup{position:static} }
+    .brow{display:flex; flex-wrap:wrap; gap:4px 16px} .brow>div:nth-child(2),.brow .why{flex-basis:100%} .brow .checks{flex-basis:100%; flex-direction:row; gap:14px} .brow .bn{flex-basis:100%} .cgroup{position:static} }
 
   .tabs{display:flex; gap:4px; margin-bottom:12px}
   .tab{padding:8px 14px; border-radius:11px; font-size:13px; font-weight:600; cursor:pointer; color:var(--muted); border:1px solid transparent}
@@ -529,11 +531,12 @@ function apply(L, C, R, t0){
     if(n&&n.at>=t0) x.LineNotes=n.text;
     if(m&&m.at>=t0) Object.assign(x, m.fields);
     if((n&&n.at>=t0)||(m&&m.at>=t0)) normLine(x); });
-  const a=document.activeElement, nid=a&&a.matches&&a.matches('input[data-note]')?a.dataset.note:null, nv=nid?a.value:'', ns=nid?a.selectionStart:0, nedit=!!nid&&a.value!==a._v0;
+  const a=document.activeElement, nid=a&&a.matches&&a.matches('input[data-note]')?a.dataset.note:null, nbox=nid&&a.closest('#boardList,#linesTbl'), nv=nid?a.value:'', ns=nid?a.selectionStart:0, nedit=!!nid&&a.value!==a._v0;
   if(selected){ const fresh=lines.find(x=>x.Id===selected.Id), typed=$('dNote').value, dirty=typed.trim()!==(selected.LineNotes||'');
     if(fresh){ openDrawer(fresh); if(dirty) $('dNote').value=typed; } else closeDrawer(); }
   buildFilterOptions(); buildBoardOptions(); paintAsOf(); paintIssueBadge(); if(!hashApplied){ applyHash(); hashApplied=true; } paintCounters(); paint();
-  if(nid){ const inp=document.querySelector(`input[data-note="${nid}"]`); if(inp){ inp.focus(); if(nedit){ inp.value=nv; inp.setSelectionRange(ns,ns); } } }
+  if(nid){ const inp=nbox&&$(nbox.id).querySelector(`input[data-note="${nid}"]`); if(inp){ inp.focus(); if(nedit){ inp.value=nv; inp.setSelectionRange(ns,ns); } }
+            else if(nedit) setTimeout(()=>saveNote(lines.find(x=>x.Id==nid), nv)); }   // after the caller clears staleView
 }
 /* marks made on the saved copy before it is updated would record yesterday's ETA / class / review signature */
 function waitForUpdate(repaint){
@@ -622,6 +625,7 @@ function buildFilterOptions(){
 }
 
 /* ───────────────────── lines table ───────────────────── */
+const noteBox=(r,ph)=>`<input class="note" data-note="${r.Id}" value="${esc(r.LineNotes||'')}" title="${esc(r.LineNotes||'')}" placeholder="${ph}" aria-label="Note for ${esc(r.Style||'')}">`;
 const COLS=[
   {k:'SentToBuyer',h:'Buyer',f:r=>`<label class="sent${r._stale?' stale':''}" title="${r._stale?'Changed since sent '+fd(r.SentToBuyerDate)+' — click to mark re-sent':r._sent?'Sent '+fd(r.SentToBuyerDate)+' by '+esc(r.SentToBuyerBy||'')+' — click to clear':'Mark as sent to buyer'}"><input type="checkbox" data-sent="${r.Id}" ${r._sent?'checked':''}> ${r._stale?'<span style="color:#b4452f">re-send</span>':r._sent?fd(r.SentToBuyerDate):''}</label>`},
   {k:'Reviewed',h:'Reviewed',f:r=>`<label class="rev" title="${r._rev?'Reviewed '+fd(r.ReviewedDate)+' by '+esc(r.ReviewedBy||'')+' — click to clear':r._needsRev&&r.ReviewedBy?'Changed since '+esc(r.ReviewedBy)+' reviewed it '+fd(r.ReviewedDate)+' — look again':'Mark as reviewed'}"><input type="checkbox" data-rev="${r.Id}" ${r._rev?'checked':''}> ${r._rev?fd(r.ReviewedDate):r._needsRev&&r.ReviewedBy?'<span style="color:#b4452f">again</span>':''}</label>`},
@@ -629,6 +633,7 @@ const COLS=[
   {k:'Customer',h:'Customer'},
   {k:'CustPO',h:'Cust PO'},
   {k:'Style',h:'Style'},
+  {k:'LineNotes',h:'Notes',f:r=>noteBox(r,'…')},
   {k:'StartDate',h:'Start',d:1},
   {k:'CancelDate',h:'Cancel',d:1},
   {k:'QtyOrd',h:'Ord',n:1},
@@ -648,7 +653,6 @@ const COLS=[
   {k:'KeyedETA',h:'ERP ETA',d:1,f:r=>r.KeyedETA?(r._disc?`<span class="disc">${fd(r.KeyedETA)}</span>`:fd(r.KeyedETA)):'<span class="dim">–</span>'},
   {k:'Container',h:'Container'},
   {k:'LastChanged',h:'Changed',d:1},
-  {k:'LineNotes',h:'Notes',f:r=>`<input class="note" data-note="${r.Id}" value="${esc(r.LineNotes||'')}" placeholder="…">`},
 ];
 function flagPills(r){
   const m={'PastCancel':'past','LFDRisk':'lfd','NotReleased':'notrel','SourcesDisagree':'disagree','NotInReports':'disagree','Late':'late','Late (ERP ETA)':'lateerp','Tight':'tight','Tight (ERP ETA)':'tighterp','Future':'future','ChangedSinceSent':'stale','NoSupply':'nosupply','Short':'short','NoETA':'noeta','Ambiguous':'ambiguous','Landed':'landed','PONotFound':'ponotfound'};
@@ -697,7 +701,14 @@ function paintLines(){
   t.tHead.querySelectorAll('th').forEach(el=>el.onclick=()=>{ const k=el.dataset.k; state.sort=state.sort.k===k?{k,d:-state.sort.d}:{k,d:1}; paintLines(); });
   t.tBodies[0].querySelectorAll('tr.row').forEach(el=>el.onclick=()=>openDrawer(lines.find(r=>r.Id==el.dataset.id)));
   wireMarks(t.tBodies[0]);
-  t.tBodies[0].querySelectorAll('input[data-note]').forEach(inp=>{ inp.onclick=e=>e.stopPropagation(); inp.onkeydown=e=>{ if(e.key==='Enter') inp.blur(); }; inp.onfocus=()=>inp._v0=inp.value; inp.onblur=()=>{ if(!repainting&&inp.value!==inp._v0) saveNote(lines.find(r=>r.Id==inp.dataset.note), inp.value); }; });
+  wireNotes(t.tBodies[0]);
+}
+/* note boxes on the board and in the table: Enter or leaving the box saves, Esc puts the old text back */
+function wireNotes(root){
+  root.querySelectorAll('input[data-note]').forEach(inp=>{ inp.onclick=e=>e.stopPropagation();
+    inp.onkeydown=e=>{ if(e.key==='Enter') inp.blur(); else if(e.key==='Escape'){ e.stopPropagation(); inp.value=inp._v0; inp.blur(); } };
+    inp.onfocus=()=>inp._v0=inp.value;
+    inp.onblur=()=>{ if(!repainting&&inp.value!==inp._v0) saveNote(lines.find(r=>r.Id==inp.dataset.note), inp.value); }; });
 }
 
 /* ───────────────────── action board ───────────────────── */
@@ -885,9 +896,9 @@ function boardRow(r, why){
     <div>${shipTag(r)}<div class="sub" title="${esc(conts.join(', '))}">${esc(conts[0]||'')}${conts.length>1?` +${conts.length-1}`:''}</div></div>
     <div class="wh ${r._late?'bad':r._tight?'warn':''}"><span class="cl">In whse </span>${w!=null?ds(r.WhseDate):'–'}<div class="sub">${r.ETA?'ETA '+ds(r.ETA)+srcTag(r):'no ETA'}</div></div>
     <div class="why">${parts.map((t,i)=>`<span class="${i===0?'lead':''}">${esc(t)}</span>`).join('<span class="dot"> · </span>')}</div>
-    <div class="nt" title="${esc(r.LineNotes||'')}">${r.LineNotes?'✎':''}</div></div>`;
+    <div class="bn">${noteBox(r,'Add a note…')}</div></div>`;
 }
-const BHEAD='<div class="bhead"><div>Rev · Sent</div><div>Customer · Style</div><div>Window</div><div>Container</div><div>In whse</div><div>Why it is here</div><div></div></div>';
+const BHEAD='<div class="bhead"><div>Rev · Sent</div><div>Customer · Style</div><div>Window</div><div>Container</div><div>In whse</div><div>Why it is here</div><div>Notes</div></div>';
 function paintBoard(){
   const D=boardData();
   const cnt={new:D.newRows.length, lfd:D.lfd.length, rev:D.rev.filter(r=>r._needsRev).length, past:D.past.filter(r=>r._needsRev).length,
@@ -944,9 +955,9 @@ function paintBoard(){
   const filtering=$('bq').value.trim()||$('bCust').value;
   $('boardTitle').textContent=card.l;
   $('boardSub').textContent=filtering?`showing ${shown} of ${total}${$('bCust').value?' · '+$('bCust').value:''}`:subs[card.k];
-  $('boardList').innerHTML=shown?BHEAD+html:`<div class="done">${total?'Nothing matches the search.':'All clear ✓'}<span>${total?'Clear the search or customer filter.':({new:'No new problems since the last report.',lfd:'No container at port is close to its last free day without a pickup.',rev:'Every late, tight or flagged line has been reviewed.',past:'No open line past its cancel date is waiting for a review.',resend:'Nothing has changed since it was sent to a buyer.'})[state.card]}</span></div>`;
+  repainting=true; try{ $('boardList').innerHTML=shown?BHEAD+html:`<div class="done">${total?'Nothing matches the search.':'All clear ✓'}<span>${total?'Clear the search or customer filter.':({new:'No new problems since the last report.',lfd:'No container at port is close to its last free day without a pickup.',rev:'Every late, tight or flagged line has been reviewed.',past:'No open line past its cancel date is waiting for a review.',resend:'Nothing has changed since it was sent to a buyer.'})[state.card]}</span></div>`; } finally{ repainting=false; }
   if($('boardMore')) $('boardMore').onclick=e=>{ e.stopPropagation(); state.boardLimit+=150; paintBoard(); };
-  wireMarks($('boardList'), true);
+  wireMarks($('boardList'), true); wireNotes($('boardList'));
   $('boardList').querySelectorAll('.brow').forEach(el=>{ const open=()=>openDrawer(lines.find(r=>r.Id==el.dataset.id));
     el.onclick=open; el.onkeydown=e=>{ if((e.key==='Enter'||e.key===' ')&&e.target===el){ e.preventDefault(); open(); } }; });
 }
@@ -1073,8 +1084,8 @@ async function saveNote(r, text){
   if(waitForUpdate(false)) return;   // the typed text stays in the box; leaving it again saves
   try{ await patchItem(LISTS.lines, r.Id, {LineNotes:text}); noteSaves[r.Id]={text, at:Date.now()};
        const cur=lines.find(x=>x.Id===r.Id)||r; cur.LineNotes=text; normLine(cur); if(cur!==r){ r.LineNotes=text; normLine(r); }
-       const ti=document.querySelector(`input[data-note="${r.Id}"]`), dn=$('dNote');   // no full repaint: keeps focus
-       if(ti&&(ti!==document.activeElement||ti.value===ti._v0)){ ti.value=text; ti._v0=text; }
+       const dn=$('dNote');   // no full repaint: keeps focus. The board and the table each have a box for the line
+       document.querySelectorAll(`input[data-note="${r.Id}"]`).forEach(ti=>{ if(ti!==document.activeElement||ti.value===ti._v0){ ti.value=text; ti._v0=text; } ti.title=text; });
        if(selected&&selected.Id===r.Id&&(document.activeElement!==dn||dn.value===dn._v0)){ dn.value=text; dn._v0=text; }
        toast('Note saved'); }
   catch(e){ toast('Could not save note: '+e.message); }   // the typed text stays where it was
