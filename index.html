@@ -794,7 +794,7 @@ function urgency(r){
   return u;
 }
 function sortByUrgency(arr){
-  const k=new Map(arr.map(r=>[r,[urgency(r), dayNo(r.StartDate)??9e9]]));
+  const k=new Map(arr.map(r=>[r,[boardKeep.has(r.Id)?boardKeep.get(r.Id):urgency(r), dayNo(r.StartDate)??9e9]]));
   return arr.sort((a,b)=>{ const x=k.get(a), y=k.get(b); return y[0]-x[0]||x[1]-y[1]||String(a.Customer).localeCompare(String(b.Customer)); });
 }
 /* Changes since the report before the latest one: on Monday that is everything since Friday's report.
@@ -816,7 +816,7 @@ function newByLine(){
   });
   return by;
 }
-const boardKeep=new Set();   // lines ticked on the board stay in place until the card changes or the data reloads
+const boardKeep=new Map();   // Id -> urgency when ticked: ticked lines stay in place until the card changes or the data reloads
 function boardData(){
   const act=lines.filter(r=>r._active), byKey=new Map(lines.map(r=>[r.Title,r]));
   const nb=newByLine(), newRows=[...nb.keys()].map(k=>byKey.get(k)).filter(Boolean);
@@ -859,12 +859,14 @@ function boardLines(){
 function exportBoard(){
   if(typeof XLSX==='undefined'){ toast('Excel library did not load — check the network'); return; }
   const rows=boardLines(); if(!rows.length){ toast('Nothing to export'); return; }
+  const nb=state.card==='new'?newByLine():null;
+  const why=r=>{ const m=nb&&nb.get(r.Title); return m?NEW_ORDER.filter(t=>m.has(t)).map(t=>changeText(m.get(t))).join(' · '):whyParts(r).join(' · '); };
   const asDate=s=>{ if(!s) return null; const d=new Date(d10(s)+'T00:00:00'); return isNaN(d)?null:d; };
   const t=todayNo(), card=CARDS.find(c=>c.k===state.card);
   const head=['Customer','Style','Cust PO','Order','Import PO','Start','Cancel','Days past cancel','Status','Container','ETA','ETA source','In warehouse','Why it is here','Reviewed','Sent to buyer','Notes'];
   const data=rows.map(r=>[r.Customer||'', r.Style||'', r.CustPO||'', r.OrdNo||'', r.ImportPO||'', asDate(r.StartDate), asDate(r.CancelDate),
     r._past&&dayNo(r.CancelDate)!=null?t-dayNo(r.CancelDate):'', r.ShipStatus||'', r.Container||'', asDate(r.ETA), r.ETASource||'', asDate(r.WhseDate),
-    whyParts(r).join(' · '), r._rev?asDate(r.ReviewedDate):null, r._sent?asDate(r.SentToBuyerDate):null, r.LineNotes||'']);
+    why(r), r._rev?asDate(r.ReviewedDate):null, r._sent?asDate(r.SentToBuyerDate):null, r.LineNotes||'']);
   const ws=XLSX.utils.aoa_to_sheet([head].concat(data),{cellDates:true});
   const dateCols=[5,6,10,12,14,15], rng=XLSX.utils.decode_range(ws['!ref']);
   for(let R=1;R<=rng.e.r;R++) dateCols.forEach(C=>{ const cell=ws[XLSX.utils.encode_cell({r:R,c:C})]; if(cell&&cell.v instanceof Date){ cell.t='d'; cell.z='m/d/yyyy'; } });
@@ -950,7 +952,7 @@ function paintBoard(){
 }
 /* checkbox wiring shared by the board and the All lines table */
 function wireMarks(root, keep){
-  const hold=id=>{ if(keep) boardKeep.add(+id); };
+  const hold=id=>{ if(keep&&!boardKeep.has(+id)){ const r=lines.find(x=>x.Id==id); boardKeep.set(+id, r?urgency(r):0); } };
   root.querySelectorAll('input[data-sent]').forEach(cb=>{ cb.onclick=e=>e.stopPropagation(); cb.onchange=()=>{ hold(cb.dataset.sent); const r=lines.find(x=>x.Id==cb.dataset.sent); if(r&&r._stale){ cb.checked=true; setSent(r,true); } else setSent(r, cb.checked); }; });
   root.querySelectorAll('input[data-rev]').forEach(cb=>{ cb.onclick=e=>e.stopPropagation(); cb.onchange=()=>{ hold(cb.dataset.rev); setReviewed(lines.find(x=>x.Id==cb.dataset.rev), cb.checked); }; });
   root.querySelectorAll('label.sent,label.rev').forEach(l=>l.addEventListener('click',e=>e.stopPropagation()));
