@@ -994,6 +994,7 @@ function paintBoard(){
         if(left<=0) break;
         if(g.name){ const nr=g.rows.filter(needsMark.rev).length, ns=g.rows.filter(needsMark.sent).length, gi=bulkGroups.push({name:g.name, ids:g.rows.map(r=>r.Id)})-1;
           html+=`<div class="cgroup"><b>${esc(g.name)}</b><span class="dim">${esc(groupNote(g.rows))}</span><span class="gact">`+
+            `<button class="btn sm" data-copy="${gi}" title="Copy these ${g.rows.length} lines as a table to paste into an email to the buyer">Copy for buyer</button>`+
             (nr?`<button class="btn sm" data-bulk="rev" data-g="${gi}" title="Mark the ${nr} lines here that need a review as reviewed">Mark ${nr} reviewed</button>`:'')+
             (ns?`<button class="btn sm" data-bulk="sent" data-g="${gi}" title="Mark the ${ns} lines here that are not sent, or changed since sent, as sent to the buyer today">Mark ${ns} sent</button>`:'')+`</span></div>`; }
         const take=g.rows.slice(0,left); left-=take.length; html+=take.map(rowHtml).join('');
@@ -1009,6 +1010,8 @@ function paintBoard(){
   repainting=true; try{ $('boardList').innerHTML=shown?BHEAD+html:`<div class="done">${total?'Nothing matches the search.':'All clear ✓'}<span>${total?'Clear the search or customer filter.':({new:'No new problems since the last report.',lfd:'No container at port is close to its last free day without a pickup.',rev:'Every late, tight or flagged line has been reviewed.',past:'No open line past its cancel date is waiting for a review.',resend:'Nothing has changed since it was sent to a buyer.'})[state.card]}</span></div>`; } finally{ repainting=false; }
   if($('boardMore')) $('boardMore').onclick=e=>{ e.stopPropagation(); state.boardLimit+=150; paintBoard(); };
   wireMarks($('boardList'), true); wireNotes($('boardList'));
+  $('boardList').querySelectorAll('button[data-copy]').forEach(b=>{ const g=bulkGroups[+b.dataset.copy];
+    b.onclick=e=>{ e.stopPropagation(); if(g) copyForBuyer(g.ids, g.name); }; });
   $('boardList').querySelectorAll('button[data-bulk]').forEach(b=>{ const g=bulkGroups[+b.dataset.g];
     b.onclick=e=>{ e.stopPropagation(); if(g){ b.disabled=true; bulkMark(b.dataset.bulk, g.ids, g.name); } }; });
   $('boardList').querySelectorAll('.brow').forEach(el=>{ const open=()=>openDrawer(lines.find(r=>r.Id==el.dataset.id));
@@ -1135,6 +1138,37 @@ async function setSent(r, on){
        toast(on?(wasStale?'Marked re-sent to buyer':'Marked sent to buyer'):'Sent-to-buyer cleared'); }
   catch(e){ toast('Could not save: '+e.message); }
   paintCounters(); paint(); if(selected&&selected.Id===r.Id){ paintSentState(r); $('dFlags').innerHTML=flagPills(r); }
+}
+/* the lines under one customer heading as a table for an email to the buyer: HTML for Outlook, tab-separated text for anything else */
+const BUYER_SHIP={'Not shipped':'Not shipped yet','On the water':'On the water','At port':'At port','Available':'At port','Picked up':'On the way to our warehouse','Delivered':'In our warehouse','Landed':'In our warehouse'};
+const BUYER_COLS=[
+  ['PO', r=>r.CustPO||''],
+  ['Style', r=>r.Style||''],
+  ['Qty', r=>(r.QtyOrd!=null?(+r.QtyOrd).toLocaleString('en-US'):'')+(r.ShortQty?` (short ${(+r.ShortQty).toLocaleString('en-US')})`:'')],
+  ['Start', r=>fd(r.StartDate)],
+  ['Cancel', r=>fd(r.CancelDate)],
+  ['Expected in our warehouse', r=>{ const w=dayNo(r.WhseDate), here=r.ShipStatus==='Delivered'||r.ShipStatus==='Landed';
+    return w==null||(!here&&w<todayNo())?'TBD':fd(r.WhseDate); }],   // a passed date for goods not in yet would mislead the buyer
+  ['Status', r=>BUYER_SHIP[r.ShipStatus]||r.ShipStatus||''],
+  ['Comment', r=>r._past?'Cancel date passed':r._late?'After cancel date':''],
+];
+async function copyForBuyer(ids, name){
+  const rows=ids.map(id=>lines.find(x=>x.Id===id)).filter(Boolean)
+    .sort((a,b)=>(d10(a.CancelDate)||'9').localeCompare(d10(b.CancelDate)||'9')||String(a.CustPO||'').localeCompare(String(b.CustPO||''))||String(a.Style||'').localeCompare(String(b.Style||'')));
+  if(!rows.length){ toast('Nothing to copy'); return; }
+  const cell='border:1px solid #b7c0cc;padding:4px 8px;font-family:Calibri,Arial,sans-serif;font-size:10pt;white-space:nowrap;text-align:left';
+  const html='<table style="border-collapse:collapse"><tr>'+BUYER_COLS.map(([h])=>`<th style="${cell};background:#eef2f7">${esc(h)}</th>`).join('')+'</tr>'+
+    rows.map(r=>'<tr>'+BUYER_COLS.map(([,f])=>`<td style="${cell}">${esc(f(r))}</td>`).join('')+'</tr>').join('')+'</table>';
+  const text=[BUYER_COLS.map(([h])=>h)].concat(rows.map(r=>BUYER_COLS.map(([,f])=>f(r)))).map(a=>a.join('\t')).join('\r\n');
+  let ok=false;
+  try{ await navigator.clipboard.write([new ClipboardItem({'text/html':new Blob([html],{type:'text/html'}), 'text/plain':new Blob([text],{type:'text/plain'})})]); ok=true; }
+  catch(e){   // no ClipboardItem, or the browser refused: copy a hidden selection instead
+    const d=document.createElement('div'); d.contentEditable='true'; d.style.cssText='position:fixed;left:-9999px;top:0'; d.innerHTML=html; document.body.appendChild(d);
+    const sel=getSelection(), rg=document.createRange(); rg.selectNodeContents(d); sel.removeAllRanges(); sel.addRange(rg);
+    try{ ok=document.execCommand('copy'); }catch(e2){ ok=false; }
+    sel.removeAllRanges(); d.remove();
+  }
+  toast(ok?`Copied ${plural(rows.length,'line')} for ${name} — paste into your email`:'Could not copy — the browser blocked the clipboard');
 }
 /* Mark reviewed / Mark sent for every line under one customer heading on the board */
 const MARK_BOOL=new Set(['Reviewed','SentToBuyer','SentStale']), MARK_DATE=new Set(['ReviewedDate','SentToBuyerDate','SentETA','SentCRD']);
