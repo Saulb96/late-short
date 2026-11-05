@@ -283,6 +283,7 @@
         <input type="search" id="bq" placeholder="Search customer, style, PO, container…" aria-label="Search the board">
         <select id="bCust" aria-label="Customer"><option value="">All customers</option></select>
         <label class="chk" style="padding:0"><input type="checkbox" id="bGroup"> Group by customer</label>
+        <button class="btn sm" id="bReport" title="The Excel report from the morning email, with the notes as they are right now">Download report</button>
         <button class="btn sm" id="bExport" title="Save the lines shown below to Excel">Export this list</button>
       </div>
       <div class="blist" id="boardList"></div>
@@ -356,6 +357,7 @@ const BOARD_DAYS = 14;                                       // first load: enou
 let changeDays = BOARD_DAYS;
 const LISTS = { lines:"Shortage_Lines", changes:"Shortage_Changes", runs:"Shortage_Runs" };
 const RUN_URL = "https://metro1-lateshort-fn.azurewebsites.net/api/run";
+const REPORT_URL = "https://metro1-lateshort-fn.azurewebsites.net/api/report";
 const API_SCOPES = ["api://0f167855-bc37-4b16-8aab-df8047df434d/access_as_user"]; // token for the Function; no function key anywhere
 const STALE_HOURS = 30;
 
@@ -485,6 +487,7 @@ const RUN_SEL="Title,RunDate,Trigger,Emailed,Reported,TrackerModified,ReportFile
 const noteSaves={};   // Id -> {text, at}: notes saved while a reload was in flight
 const noteDrafts={};   // Id -> text typed in a note box but not saved yet: kept through redraws and reloads
 const notePending=new Set();   // notes refused while the saved copy was on screen: saved once the update is in
+const noteInflight=new Set();   // note saves on their way to SharePoint: Download report waits for them
 /* Saved copy + changed-only loading.
    Lines are never deleted (a line gone from the ERP gets Active=false) and the change log only grows, so between full
    loads the page asks SharePoint only for lines modified since the last load and for the change rows of runs it has not
@@ -1147,10 +1150,12 @@ const BUYER_COLS=[
   ['Qty', r=>(r.QtyOrd!=null?(+r.QtyOrd).toLocaleString('en-US'):'')+(r.ShortQty?` (short ${(+r.ShortQty).toLocaleString('en-US')})`:'')],
   ['Start', r=>fd(r.StartDate)],
   ['Cancel', r=>fd(r.CancelDate)],
-  ['Expected in our warehouse', r=>{ const w=dayNo(r.WhseDate), here=r.ShipStatus==='Delivered'||r.ShipStatus==='Landed';
-    return w==null||(!here&&w<todayNo())?'TBD':fd(r.WhseDate); }],   // a passed date for goods not in yet would mislead the buyer
+  ['ETA', r=>{ const typed=/\beta\s*(?:around\s*|~\s*)?(\d{1,2}\/\d{1,2})/i.exec(r.LineNotes||''), e=dayNo(r.ETA);   // the port date; one typed in the note wins
+    if(typed) return typed[1];
+    if(r.ShipStatus==='Delivered'||r.ShipStatus==='Landed') return 'Here now';
+    return e==null||((!r.ShipStatus||r.ShipStatus==='Not shipped'||r.ShipStatus==='On the water')&&e<todayNo())?'TBD':ds(r.ETA); }],   // a passed date for goods still on the way would mislead the buyer
   ['Status', r=>BUYER_SHIP[r.ShipStatus]||r.ShipStatus||''],
-  ['Comment', r=>r._past?'Cancel date passed':r._late?'After cancel date':''],
+  ['Comment', r=>r._past?'Cancel date passed':r._late?'In our warehouse after cancel':''],
 ];
 async function copyForBuyer(ids, name){
   const rows=ids.map(id=>lines.find(x=>x.Id===id)).filter(Boolean)
@@ -1217,7 +1222,8 @@ async function saveNote(r, text){
   if(!r) return; const marks=()=>document.querySelectorAll(`input[data-note="${r.Id}"]`).forEach(ti=>ti.classList.toggle('unsaved', r.Id in noteDrafts));
   text=(text||'').trim(); if(text===(r.LineNotes||'')){ delete noteDrafts[r.Id]; marks(); return; }
   if(staleView){ notePending.add(r.Id); marks(); toast('Still updating to the latest data — the note will be saved when it is in'); return; }
-  try{ await patchItem(LISTS.lines, r.Id, {LineNotes:text}); noteSaves[r.Id]={text, at:Date.now()};
+  try{ const saving=patchItem(LISTS.lines, r.Id, {LineNotes:text}); noteInflight.add(saving); saving.catch(()=>{}).finally(()=>noteInflight.delete(saving));
+       await saving; noteSaves[r.Id]={text, at:Date.now()};
        const cur=lines.find(x=>x.Id===r.Id)||r; cur.LineNotes=text; normLine(cur); if(cur!==r){ r.LineNotes=text; normLine(r); }
        const dn=$('dNote');   // no full repaint: keeps focus. The board and the table each have a box for the line
        if(noteDrafts[r.Id]!=null&&noteDrafts[r.Id].trim()===text) delete noteDrafts[r.Id];
@@ -1232,6 +1238,24 @@ async function apiToken(){
   try{ return (await msalApp.acquireTokenSilent({scopes:API_SCOPES, account})).accessToken; }
   catch(e){ if(window.self!==window.top) return (await msalApp.acquireTokenPopup({scopes:API_SCOPES, account})).accessToken;
             msalApp.acquireTokenRedirect({scopes:API_SCOPES, account}); throw e; }
+}
+/* the same Excel report as the morning email, built by the Function from the notes as they are now */
+async function downloadReport(){
+  const btn=$('bReport'); btn.disabled=true; btn.textContent='Building report…';
+  try{
+    if(document.activeElement.matches('input[data-note],#dNote')) document.activeElement.blur();   // the note being typed goes in too
+    if(loading) await loading.catch(()=>{});   // notes refused while "updating…" save when the update lands
+    await Promise.allSettled([...noteInflight]);
+    const tok=await apiToken();
+    const r=await fetch(REPORT_URL,{headers:{'Authorization':'Bearer '+tok}});
+    if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||('error '+r.status)); }
+    const url=URL.createObjectURL(await r.blob()), a=document.createElement('a');
+    a.href=url; a.download=`Late and Short ${new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'})}.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),60000);
+    const unsaved=Object.keys(noteDrafts).length;
+    toast(unsaved?`Report downloaded — ${plural(unsaved,'note')} not saved yet and not in it`:'Report downloaded');
+  }catch(e){ toast('Could not build the report: '+(e.errorMessage||e.message||e)); }
+  btn.disabled=false; btn.textContent='Download report';
 }
 async function refreshNow(){
   const btn=$('refreshBtn'); btn.disabled=true; const t0=Date.now();
@@ -1326,6 +1350,7 @@ function paint(){ if(state.tab==='board') paintBoard(); else if(state.tab==='lin
 $('bGroup').checked=state.group;
 $('bGroup').onchange=()=>{ state.group=$('bGroup').checked; try{ localStorage.setItem('ls-group', state.group?'1':'0'); }catch(e){} paintBoard(); };
 $('bExport').onclick=exportBoard;
+$('bReport').onclick=downloadReport;
 $('clearF').onclick=()=>{ ['q','fCust','fFact','fRound','fSrc','fShip'].forEach(id=>$(id).value=''); $('showGone').checked=false; state.flags.clear(); paintCounters(); paintLines(); syncHash(); };
 
 initAuth();
