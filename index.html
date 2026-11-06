@@ -487,7 +487,9 @@ const RUN_SEL="Title,RunDate,Trigger,Emailed,Reported,TrackerModified,ReportFile
 const noteSaves={};   // Id -> {text, at}: notes saved while a reload was in flight
 const noteDrafts={};   // Id -> text typed in a note box but not saved yet: kept through redraws and reloads
 const notePending=new Set();   // notes refused while the saved copy was on screen: saved once the update is in
-const noteInflight=new Set();   // note saves on their way to SharePoint: Download report waits for them
+const savesInflight=new Set();   // notes and Reviewed ticks on their way to SharePoint: Download report waits for them
+const tracked=p=>{ savesInflight.add(p); p.catch(()=>{}).finally(()=>savesInflight.delete(p)); return p; };
+const GOOD_NOTE=/^good( |$)/i;   // same test as is_good_note in the Function
 /* Saved copy + changed-only loading.
    Lines are never deleted (a line gone from the ERP gets Active=false) and the change log only grows, so between full
    loads the page asks SharePoint only for lines modified since the last load and for the change rows of runs it has not
@@ -589,7 +591,7 @@ function normLine(r){
   r._sent=r.SentToBuyer===true;
   r._tight=r.IsTight===true; r._future=r.IsFuture===true; r._stale=r.SentStale===true;
   r._rev=r.Reviewed===true;
-  r._needsRev=!r._rev && (r._late||r._tight||REVIEW_FLAGS.some(f=>r._flags.includes(f)));
+  r._needsRev=!r._rev && (r._late||r._tight||REVIEW_FLAGS.some(f=>r._flags.includes(f))||((r.ShortQty||0)>0&&!!r.ReviewedBy&&GOOD_NOTE.test(r.LineNotes||'')));   // the last: a short line marked "good" that moved is back on the report
   r._lfdSoon=r._flags.includes('LFDRisk');
   r._past=r._flags.includes('PastCancel');   // cancel date already behind us: needs the buyer, not a faster container
   r._hay=[r.Style,r.CustPO,r.ImportPO,r.Container,r.Customer,r.OrdNo,r.RoundNo,r.Factory,r.StatusText,r.LineNotes,r.ShipStatus].join(' ').toLowerCase();
@@ -1124,7 +1126,7 @@ async function setReviewed(r, on){
   if(r) r=lines.find(x=>x.Id===r.Id)||r;
   if(!r) return;
   const fields=revFields(r, on);
-  try{ await patchItem(LISTS.lines, r.Id, fields); markSaves[r.Id]={fields:{...((markSaves[r.Id]||{}).fields||{}), ...fields}, at:Date.now()};
+  try{ await tracked(patchItem(LISTS.lines, r.Id, fields)); markSaves[r.Id]={fields:{...((markSaves[r.Id]||{}).fields||{}), ...fields}, at:Date.now()};
        Object.assign(r, fields); normLine(r); toast(on?'Marked reviewed':'Reviewed cleared'); }
   catch(e){ toast('Could not save: '+e.message); }
   paintCounters(); paint(); if(selected&&selected.Id===r.Id){ paintRevState(r); $('dFlags').innerHTML=flagPills(r); }
@@ -1200,7 +1202,7 @@ async function bulkMark(kind, ids, name){
     const items=rows.map(r=>({id:r.Id, fields:kind==='sent'?sentFields(r,true):revFields(r,true)}));
     const prev=rows.map(r=>({id:r.Id, fields:Object.fromEntries(Object.keys(items[0].fields).map(k=>[k, markWas(r,k)]))}));
     toast(`Saving ${plural(rows.length,'line')}…`);
-    const failed=await patchMany(LISTS.lines, items);
+    const failed=await tracked(patchMany(LISTS.lines, items));
     const done=items.filter(it=>!failed.has(it.id));
     done.forEach(it=>{ const r=lines.find(x=>x.Id===it.id); if(r) markLocal(r, it.fields); });
     afterMarks();
@@ -1212,7 +1214,7 @@ async function undoMarks(prev, what){
   if(waitForBulk()) return;
   bulkBusy=true;
   try{
-    const failed=await patchMany(LISTS.lines, prev.map(p=>({id:p.id, fields:p.fields})));
+    const failed=await tracked(patchMany(LISTS.lines, prev.map(p=>({id:p.id, fields:p.fields}))));
     prev.filter(p=>!failed.has(p.id)).forEach(p=>{ const r=lines.find(x=>x.Id===p.id); if(r) markLocal(r, p.fields); });
     afterMarks();
     toast(failed.size?`Undo: ${failed.size} of ${prev.length} could not be put back (${[...failed.values()][0]})`:`Undone — ${plural(prev.length,'line')} no longer marked ${what}`);
@@ -1222,14 +1224,17 @@ async function saveNote(r, text){
   if(!r) return; const marks=()=>document.querySelectorAll(`input[data-note="${r.Id}"]`).forEach(ti=>ti.classList.toggle('unsaved', r.Id in noteDrafts));
   text=(text||'').trim(); if(text===(r.LineNotes||'')){ delete noteDrafts[r.Id]; marks(); return; }
   if(staleView){ notePending.add(r.Id); marks(); toast('Still updating to the latest data — the note will be saved when it is in'); return; }
-  try{ const saving=patchItem(LISTS.lines, r.Id, {LineNotes:text}); noteInflight.add(saving); saving.catch(()=>{}).finally(()=>noteInflight.delete(saving));
-       await saving; noteSaves[r.Id]={text, at:Date.now()};
-       const cur=lines.find(x=>x.Id===r.Id)||r; cur.LineNotes=text; normLine(cur); if(cur!==r){ r.LineNotes=text; normLine(r); }
+  const was=lines.find(x=>x.Id===r.Id)||r, tick=GOOD_NOTE.test(text)?revFields(was,true):null;   // one write: the tick is what brings a "good" line back onto the report when the line changes
+  const keepAt=tick&&!boardKeep.has(r.Id)?urgency(was):null;
+  try{ await tracked(patchItem(LISTS.lines, r.Id, {LineNotes:text, ...tick})); noteSaves[r.Id]={text, at:Date.now()};
+       if(tick) markSaves[r.Id]={fields:{...((markSaves[r.Id]||{}).fields||{}), ...tick}, at:Date.now()};
+       const cur=lines.find(x=>x.Id===r.Id)||r; cur.LineNotes=text; Object.assign(cur, tick); normLine(cur); if(cur!==r){ r.LineNotes=text; Object.assign(r, tick); normLine(r); }
        const dn=$('dNote');   // no full repaint: keeps focus. The board and the table each have a box for the line
        if(noteDrafts[r.Id]!=null&&noteDrafts[r.Id].trim()===text) delete noteDrafts[r.Id];
        document.querySelectorAll(`input[data-note="${r.Id}"]`).forEach(ti=>{ if(ti!==document.activeElement) ti.value=noteDrafts[r.Id]??text; ti.title=text; }); marks();
        if(selected&&selected.Id===r.Id&&(document.activeElement!==dn||dn.value===dn._v0)){ dn.value=text; dn._v0=text; }
-       toast('Note saved'); }
+       if(tick){ if(keepAt!=null) boardKeep.set(r.Id, keepAt); afterMarks(); }
+       toast(tick?'Note saved · marked reviewed':'Note saved'); }
   catch(e){ marks(); toast('Could not save note: '+e.message+' — the text is kept; leave the box again to retry'); }
 }
 
@@ -1245,7 +1250,7 @@ async function downloadReport(){
   try{
     if(document.activeElement.matches('input[data-note],#dNote')) document.activeElement.blur();   // the note being typed goes in too
     if(loading) await loading.catch(()=>{});   // notes refused while "updating…" save when the update lands
-    await Promise.allSettled([...noteInflight]);
+    while(savesInflight.size) await Promise.allSettled([...savesInflight]);
     const tok=await apiToken();
     const r=await fetch(REPORT_URL,{headers:{'Authorization':'Bearer '+tok}});
     if(!r.ok){ const j=await r.json().catch(()=>({})); throw new Error(j.error||('error '+r.status)); }
