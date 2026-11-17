@@ -139,7 +139,7 @@
     .brow .cl{display:inline; font-size:10.5px; color:var(--muted); font-weight:500} .brow .ck{display:flex; align-items:center; gap:6px}
     .brow{display:flex; flex-wrap:wrap; gap:4px 16px} .brow>div:nth-child(2),.brow .why{flex-basis:100%} .brow .checks{flex-basis:100%; flex-direction:row; gap:14px} .brow .bn{flex-basis:100%} .cgroup{position:static} }
 
-  .tabs{display:flex; gap:4px; margin-bottom:12px}
+  .tabs{display:flex; flex-wrap:wrap; gap:4px; margin-bottom:12px}
   .tab{padding:8px 14px; border-radius:11px; font-size:13px; font-weight:600; cursor:pointer; color:var(--muted); border:1px solid transparent}
   .tab:hover{background:var(--glass2); border-color:var(--edge)}
   .tab.active{background:rgba(255,255,255,.85); color:var(--ink); border-color:var(--edge); box-shadow:0 4px 14px rgba(31,45,75,.10)}
@@ -202,6 +202,15 @@
   input.note:focus{border-color:var(--edge); background:#fff}
   input.note.unsaved:not(:focus){border-color:var(--amb)}
   .empty{padding:40px; text-align:center; color:var(--muted); font-size:13.5px}
+  .rcards{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; margin:6px 0 4px}
+  .rcards .card{padding:12px 14px 10px} .rcards .card .n{font-size:26px}
+  .rgrid{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:14px}
+  .rgrid tr.row.on td,#respTbl tr.row.sel td{background:rgba(47,155,214,.10)}
+  .lost{display:inline-block; font-size:11px; padding:1px 7px; border-radius:9px; background:rgba(31,45,75,.07); margin:1px 4px 1px 0; white-space:nowrap}
+  .lost.top{background:rgba(180,69,47,.12); color:#8a2f1d; font-weight:700}
+  select.resp{font-size:12px; padding:3px 6px; max-width:230px}
+  select.resp.picked{font-weight:700; border-color:rgba(27,111,174,.5)}
+  @media(max-width:760px){ .rgrid{grid-template-columns:minmax(0,1fr)} }
 
   /* changes view */
   .runhdr{font-size:13.5px; font-weight:700; margin:14px 0 6px; display:flex; align-items:center; gap:10px}
@@ -268,6 +277,7 @@
   <div class="tabs">
     <div class="tab active" data-tab="board">Action board</div>
     <div class="tab" data-tab="lines">All lines</div>
+    <div class="tab" data-tab="resp">Who's responsible</div>
     <div class="tab" data-tab="changes">Changes</div>
     <div class="tab" data-tab="runs">Runs</div>
     <div class="tab" data-tab="issues">Tracker issues <span id="issueBadge" class="ct bad hidden"></span></div>
@@ -307,6 +317,24 @@
     </div>
     <div class="meta"><span id="lineCount"></span></div>
     <div class="tw"><table id="linesTbl"><thead></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="panel glass hidden" id="respPanel">
+    <div class="meta" id="respMeta"></div>
+    <div class="rcards" id="respCards"></div>
+    <div class="rgrid">
+      <div><div class="runhdr">By factory</div><div class="tw" style="max-height:290px"><table id="respFact"></table></div></div>
+      <div><div class="runhdr">By customer</div><div class="tw" style="max-height:290px"><table id="respCust"></table></div></div>
+    </div>
+    <div class="filters" style="margin-top:16px">
+      <div class="f grow"><label class="lbl" for="rq">Search</label><input type="search" id="rq" placeholder="style, customer, PO, factory…"></div>
+      <div class="spacer"></div>
+      <button class="btn sm" id="respClear">Show all late lines</button>
+      <button class="btn sm" id="respExport">Export Excel</button>
+    </div>
+    <div class="meta"><span id="respCount"></span></div>
+    <div class="tw"><table id="respTbl"><thead></thead><tbody></tbody></table></div>
+    <div class="dim" id="respHow" style="font-size:11.5px; margin-top:10px; line-height:1.5"></div>
   </section>
 
   <section class="panel glass hidden" id="changesPanel">
@@ -478,13 +506,14 @@ async function patchMany(list, items){
 
 /* ───────────────────── data ───────────────────── */
 let lines=[], changes=[], runs=[], selected=null;
-const state={tab:'board', card:null, boardLimit:150, group:(()=>{ try{ return localStorage.getItem('ls-group')!=='0'; }catch(e){ return true; } })(), flags:new Map(), sort:{k:'StartDate',d:1}}; // flags: chip -> 1 include, -1 exclude
+const state={tab:'board', card:null, boardLimit:150, resp:{party:'', Factory:'', Customer:''}, group:(()=>{ try{ return localStorage.getItem('ls-group')!=='0'; }catch(e){ return true; } })(), flags:new Map(), sort:{k:'StartDate',d:1}}; // flags: chip -> 1 include, -1 exclude
 
-const LINE_SEL="Modified,Title,Customer,OrdNo,CustPO,Style,QtyOrd,QtyAlc,QtyShp,StatusText,StatusKind,ShortQty,BookedQty,ImportPO,RoundNo,Container,Factory,CRD,ShipBy,ETD,ETA,ETASource,KeyedETA,StartDate,CancelDate,Flags,IsLate,SheetLoc,Landed,FirstSeen,LastChanged,Active,SentToBuyer,SentToBuyerDate,SentToBuyerBy,LineNotes,IsTight,ETAClass,IsFuture,SentETA,SentCRD,SentClass,SentShort,SentStale,ShipStatus,WhseDate,LFD,PickupDate,DeliveryDate,Released,ShipNote,ReviewSig,Reviewed,ReviewedDate,ReviewedBy,ReviewedSig,LFDDetail";
+const LINE_SEL="Modified,Title,Customer,OrdNo,CustPO,Style,QtyOrd,QtyAlc,QtyShp,StatusText,StatusKind,ShortQty,BookedQty,ImportPO,RoundNo,Container,Factory,CRD,ShipBy,ETD,ETA,ETASource,KeyedETA,StartDate,CancelDate,Flags,IsLate,SheetLoc,Landed,FirstSeen,LastChanged,Active,SentToBuyer,SentToBuyerDate,SentToBuyerBy,LineNotes,IsTight,ETAClass,IsFuture,SentETA,SentCRD,SentClass,SentShort,SentStale,ShipStatus,WhseDate,LFD,PickupDate,DeliveryDate,Released,ShipNote,ReviewSig,Reviewed,ReviewedDate,ReviewedBy,ReviewedSig,LFDDetail,Responsible,ResponsibleBy,ResponsibleDate";
 const CHG_SEL="Title,RunDate,RunTitle,ChangeType,ChangedField,OldValue,NewValue,Customer,Style,ImportPO,Detail";
 const RUN_SEL="Title,RunDate,Trigger,Emailed,Reported,TrackerModified,ReportFile,ForwarderFile,DrayageFile,LinesRead,LateCount,NoSupplyCount,ShortCount,NoETACount,ChangeCount,RunStatus,ErrorText,DurationSec,IssueCount,Issues";
 
 const noteSaves={};   // Id -> {text, at}: notes saved while a reload was in flight
+const respSaves={};   // Id -> {fields, at}: Responsible picks saved while a reload was in flight (kept apart so they don't re-date Reviewed)
 const noteDrafts={};   // Id -> text typed in a note box but not saved yet: kept through redraws and reloads
 const notePending=new Set();   // notes refused while the saved copy was on screen: saved once the update is in
 const savesInflight=new Set();   // notes and Reviewed ticks on their way to SharePoint: Download report waits for them
@@ -563,10 +592,11 @@ function apply(L, C, R, t0){
   const kept=typing==null?null:boardKeep.has(typing)?boardKeep.get(typing):old?urgency(old):0;
   boardKeep.clear(); if(kept!=null) boardKeep.set(typing, kept);   // the row being typed in keeps its place
   lines=L.map(x=>normLine({...x})); changes=C.map(x=>({...x})).sort((a,b)=>b.Id-a.Id); runs=R.map(x=>({...x})).sort((a,b)=>b.Id-a.Id).slice(0,60);
-  lines.forEach(x=>{ const n=noteSaves[x.Id], m=markSaves[x.Id];
+  lines.forEach(x=>{ const n=noteSaves[x.Id], m=markSaves[x.Id], p=respSaves[x.Id];
     if(n&&n.at>=t0) x.LineNotes=n.text;
     if(m&&m.at>=t0) Object.assign(x, m.fields);
-    if((n&&n.at>=t0)||(m&&m.at>=t0)) normLine(x); });
+    if(p&&p.at>=t0) Object.assign(x, p.fields);
+    if((n&&n.at>=t0)||(m&&m.at>=t0)||(p&&p.at>=t0)) normLine(x); });
   for(const id in noteDrafts){ const x=lines.find(y=>y.Id==id); if(!x||noteDrafts[id].trim()===(x.LineNotes||'')) delete noteDrafts[id]; }
   if(selected){ const fresh=lines.find(x=>x.Id===selected.Id), typed=$('dNote').value, dirty=typed.trim()!==(selected.LineNotes||'');
     if(fresh){ openDrawer(fresh); if(dirty) $('dNote').value=typed; } else closeDrawer(); }
@@ -1084,6 +1114,113 @@ function paintIssues(){
     `<div class="tw" style="max-height:none"><table><tbody>${groups[cat].map(it=>`<tr><td class="wrap">${esc(it.msg)}</td></tr>`).join('')}</tbody></table></div>`).join('');
 }
 
+/* ───────────────────── who's responsible ───────────────────── */
+const PARTIES=['Production','Factory','Container planning','Forwarder','Vessel','Port & trucking','Customs','Customer','Other'];
+const NORM={readyToSail:14, transit:15, toWhse:3, factoryGrace:3, vesselGrace:3, portGrace:2};   // days; 15 on the water and 3 port to warehouse are today's normal
+const SAILED=new Set(['On the water','At port','Available','Picked up','Delivered','Landed']), ARRIVED=new Set(['At port','Available','Picked up','Delivered','Landed']);
+/* days each party lost on a late line against those targets, with the reason; the most days is the suggestion */
+function daysLost(r){
+  const n=dayNo, cancel=n(r.CancelDate), sb=n(r.ShipBy), crd=n(r.CRD), eta=n(r.ETA), whse=n(r.WhseDate), t=todayNo(), lost={}, why={};
+  const sailed=SAILED.has(r.ShipStatus), etd=n(r.ETD)??(sailed&&eta!=null?eta-NORM.transit:null);   // sailed with no ETD on the tracker: about the ETA less the normal transit
+  const etdTxt=r.ETD?ds(r.ETD):`about ${ds(new Date((etd)*864e5).toISOString())}`;
+  const put=(who,d,text)=>{ if(d>0){ lost[who]=(lost[who]||0)+d; why[who]=why[who]?why[who]+'; '+text:text; } };
+  if(sb!=null&&cancel!=null) put('Production', sb+NORM.readyToSail+NORM.transit+NORM.toWhse-cancel,
+    `ship-by ${ds(r.ShipBy)} was too late: ${NORM.readyToSail} d to sail, ${NORM.transit} on the water and ${NORM.toWhse} to the warehouse land after cancel ${ds(r.CancelDate)}`);
+  if(crd!=null&&sb!=null){ if(crd-sb>NORM.factoryGrace) put('Factory', crd-sb, `ready ${ds(r.CRD)}, ${crd-sb} d after ship-by ${ds(r.ShipBy)}`); }
+  else if(crd==null&&sb!=null){   // no ready date: the time past ship-by is the factory's, beyond the normal wait for a container once it sailed
+    if(etd!=null&&(etd<=t||sailed)) put('Factory', etd-sb-NORM.readyToSail, `no ready date; sailed ${etdTxt}, ${etd-sb} d after ship-by ${ds(r.ShipBy)}`);
+    else if(sb<t) put('Factory', t-sb, `no ready date yet; ship-by was ${ds(r.ShipBy)}`); }
+  if(crd!=null&&etd!=null&&(etd<=t||sailed)) put('Container planning', etd-crd-NORM.readyToSail, `ready ${ds(r.CRD)}, sailed ${etdTxt}: ${etd-crd} d waiting (target ${NORM.readyToSail})`);
+  else if(crd!=null){ const end=etd!=null?Math.max(etd,t):t;   // not sailed yet: the wait so far, or to the planned sailing if that is later
+    if(end>crd) put('Container planning', end-crd-NORM.readyToSail, `ready ${ds(r.CRD)}, ${etd!=null?'sails '+etdTxt:'no sailing yet'}: ${end-crd} d waiting (target ${NORM.readyToSail})`); }
+  if(r.ETD&&eta!=null&&eta-n(r.ETD)>NORM.transit+NORM.vesselGrace) put('Vessel', eta-n(r.ETD)-NORM.transit, `${eta-n(r.ETD)} d on the water (normal ${NORM.transit})`);
+  if(r.ShipStatus==='On the water'&&eta!=null&&eta<t) put('Vessel', t-eta, `still on the water ${t-eta} d after ETA ${ds(r.ETA)}`);
+  if(ARRIVED.has(r.ShipStatus)&&eta!=null&&whse!=null&&eta<=t&&whse-eta>NORM.toWhse+NORM.portGrace){
+    const rel=r.Released&&r.Released!=='Yes'?r.Released:'', who=/customs/i.test(rel)?'Customs':/freight/i.test(rel)?'Forwarder':'Port & trucking';
+    put(who, whse-eta-NORM.toWhse, `at port ${ds(r.ETA)}, in the warehouse ${ds(r.WhseDate)}${rel?' · not released: '+rel:''}`); }
+  return {lost, why};
+}
+function respOf(r){
+  const {lost, why}=daysLost(r);
+  const suggested=PARTIES.filter(p=>lost[p]).sort((a,b)=>lost[b]-lost[a]||PARTIES.indexOf(a)-PARTIES.indexOf(b))[0]||'';
+  const picked=PARTIES.includes(r.Responsible)?r.Responsible:'';
+  return {r, lost, why, suggested, picked, party:picked||suggested};
+}
+const CANT='Can’t tell';
+function respRows(){ return lines.filter(x=>x._active&&x._late).map(respOf); }
+function respChips(x){
+  const order=PARTIES.filter(p=>x.lost[p]).sort((a,b)=>x.lost[b]-x.lost[a]);
+  return order.map(p=>`<span class="lost${p===x.party?' top':''}" title="${esc(x.why[p])}">${esc(p)} +${x.lost[p]} d</span>`).join('')||'<span class="dim">–</span>';
+}
+function respTally(rows){ const m=new Map(); rows.forEach(x=>{ const k=x.party||CANT; m.set(k,(m.get(k)||0)+1); }); return [...m].sort((a,b)=>b[1]-a[1]); }
+/* the late lines the list shows: card, factory, customer and search applied, most days lost first */
+function respShown(all){
+  const f=state.resp, q=$('rq').value.trim().toLowerCase();
+  return all.filter(x=>(!f.party||(x.party||CANT)===f.party)&&(!f.Factory||(x.r.Factory||'—')===f.Factory)&&(!f.Customer||(x.r.Customer||'—')===f.Customer)&&(!q||x.r._hay.includes(q)))
+    .sort((a,b)=>((b.lost[b.party]||0)-(a.lost[a.party]||0))||(dayNo(a.r.CancelDate)??9e9)-(dayNo(b.r.CancelDate)??9e9));
+}
+function paintResp(){
+  const all=respRows(), f=state.resp;
+  const days={}; all.forEach(x=>PARTIES.forEach(p=>{ if(x.lost[p]) days[p]=(days[p]||0)+x.lost[p]; }));
+  const count=new Map(respTally(all)), picked=all.filter(x=>x.picked).length;
+  $('respMeta').textContent=`${plural(all.length,'late line')} · each goes to the party that lost the most days against the targets below${picked?` · ${picked} picked by hand`:''}. Click a box, a factory or a customer to see its lines.`;
+  const cards=[['', 'All late', all.length, '']].concat(PARTIES.concat([CANT]).filter(p=>count.get(p)||days[p]).map(p=>[p, p, count.get(p)||0, days[p]?`${days[p].toLocaleString('en-US')} days lost`:'']));
+  $('respCards').innerHTML=cards.map(([k,l,n,s])=>`<button class="card${f.party===k?' on':''}" data-party="${esc(k)}"><div class="n">${n}</div><div class="l">${esc(l)}</div><div class="s">${esc(s)}</div></button>`).join('');
+  $('respCards').querySelectorAll('.card').forEach(el=>el.onclick=()=>{ f.party=el.dataset.party; paintResp(); });
+  const table=(id, key, label)=>{
+    const g=new Map(); all.forEach(x=>{ const k=x.r[key]||'—'; if(!g.has(k)) g.set(k,[]); g.get(k).push(x); });
+    const rows=[...g].sort((a,b)=>b[1].length-a[1].length);
+    $(id).innerHTML=`<thead><tr><th>${label}</th><th class="num">Late</th><th>Who</th></tr></thead><tbody>`+rows.map(([k,xs])=>
+      `<tr class="row${f[key]===k?' on':''}" data-k="${esc(k)}"><td>${esc(k)}</td><td class="num">${xs.length}</td><td class="wrap">${respTally(xs).map(([p,n])=>`<span class="lost">${esc(p)} ${n}</span>`).join('')}</td></tr>`).join('')+'</tbody>';
+    $(id).querySelectorAll('tr.row').forEach(el=>el.onclick=()=>{ f[key]=f[key]===el.dataset.k?'':el.dataset.k; paintResp(); });
+  };
+  table('respFact','Factory','Factory'); table('respCust','Customer','Customer');
+  const shown=respShown(all);
+  $('respCount').textContent=`${shown.length} of ${plural(all.length,'late line')}`+[f.party,f.Factory,f.Customer].filter(Boolean).map(v=>' · '+v).join('');
+  const t=$('respTbl');
+  t.tHead.innerHTML='<tr><th>Responsible</th><th>Customer</th><th>Style</th><th>Cust PO</th><th>Factory</th><th>Cancel</th><th>In whse</th><th>Days lost by step</th><th>Status</th></tr>';
+  t.tBodies[0].innerHTML=shown.length?shown.map(x=>{ const r=x.r;
+    const opts=`<option value="">${esc(x.suggested?'Suggested: '+x.suggested:'Suggested: can’t tell')}</option>`+PARTIES.map(p=>`<option${x.picked===p?' selected':''}>${esc(p)}</option>`).join('');
+    return `<tr class="row${selected&&selected.Id===r.Id?' sel':''}" data-id="${r.Id}"><td><select class="resp${x.picked?' picked':''}" data-resp="${r.Id}" aria-label="Responsible for ${esc(r.Style)}" title="${x.picked?esc(`Picked by ${r.ResponsibleBy||'?'} ${fd(r.ResponsibleDate)}`):'The suggestion; pick a party to change it'}">${opts}</select></td>`+
+      `<td>${esc(r.Customer)}</td><td>${esc(r.Style)}</td><td>${esc(r.CustPO)}</td><td>${esc(r.Factory)||'<span class="dim">–</span>'}</td><td>${fd(r.CancelDate)}</td><td>${fd(r.WhseDate)}</td><td class="wrap">${respChips(x)}</td><td>${shipTag(r)}</td></tr>`; }).join('')
+    :`<tr><td colspan="9" class="empty">No late lines here.</td></tr>`;
+  t.tBodies[0].querySelectorAll('tr.row').forEach(el=>el.onclick=()=>openDrawer(lines.find(r=>r.Id==el.dataset.id)));
+  t.tBodies[0].querySelectorAll('select[data-resp]').forEach(s=>{ s.onclick=e=>e.stopPropagation(); s.onchange=()=>setResponsible(lines.find(r=>r.Id==s.dataset.resp), s.value); });
+  $('respHow').innerHTML=`<b>How the suggestion is worked out.</b> Targets: ready to sail in ${NORM.readyToSail} days, ${NORM.transit} days on the water, ${NORM.toWhse} days port to warehouse. `+
+    `<b>Production</b>: the ship-by date was already too late for the cancel date. <b>Factory</b>: ready after ship-by; with no ready date, the time past ship-by (less the normal ${NORM.readyToSail} days once it sails). `+
+    `<b>Container planning</b>: longer than ${NORM.readyToSail} days from ready to sailing (when the tracker has no ETD for goods that sailed, ETA less ${NORM.transit} days). `+
+    `<b>Vessel</b>: more than ${NORM.transit + NORM.vesselGrace} days on the water, or still on the water after the ETA. `+
+    `<b>Customs</b> / <b>Forwarder</b> / <b>Port &amp; trucking</b>: slow from port to warehouse once at port, by what is holding it (customs, freight release, or pickup). `+
+    `Customer and Other are picked by hand. A pick by hand stays until someone changes it; "Suggested" puts the line back on the suggestion.`;
+}
+async function setResponsible(r, party){
+  if(!r) return;
+  if(waitForUpdate(true)||waitForBulk()) return;
+  r=lines.find(x=>x.Id===r.Id)||r;
+  const fields=party?{Responsible:party, ResponsibleBy:$('whoName').textContent, ResponsibleDate:todayNoon()}:{Responsible:'', ResponsibleBy:'', ResponsibleDate:null};
+  try{ await tracked(patchItem(LISTS.lines, r.Id, fields)); respSaves[r.Id]={fields, at:Date.now()};
+       const cur=lines.find(x=>x.Id===r.Id)||r; Object.assign(cur, fields); normLine(cur);   // a reload may have swapped the line object meanwhile
+       toast(party?`${r.Style}: ${party}`:`${r.Style}: back to the suggestion`); }
+  catch(e){ toast('Could not save: '+e.message); }
+  paint();
+}
+function exportResp(){
+  if(typeof XLSX==='undefined'){ toast('Excel library did not load — check the network'); return; }
+  const rows=respShown(respRows()); if(!rows.length){ toast('No late lines in this list'); return; }
+  const asDate=s=>{ if(!s) return null; const d=new Date(d10(s)+'T00:00:00'); return isNaN(d)?null:d; };
+  const head=['Responsible','Suggested','Picked by','Customer','Style','Cust PO','Factory','Ship by','Ready','ETD','ETA','Cancel','In warehouse','Status'].concat(PARTIES.map(p=>p+' days'));
+  const data=rows.map(x=>{ const r=x.r; return [x.party||CANT, x.suggested||'', x.picked?(r.ResponsibleBy||''):'', r.Customer||'', r.Style||'', r.CustPO||'', r.Factory||'',
+    asDate(r.ShipBy), asDate(r.CRD), asDate(r.ETD), asDate(r.ETA), asDate(r.CancelDate), asDate(r.WhseDate), r.ShipStatus||''].concat(PARTIES.map(p=>x.lost[p]||null)); });
+  const ws=XLSX.utils.aoa_to_sheet([head].concat(data),{cellDates:true}), rng=XLSX.utils.decode_range(ws['!ref']);
+  for(let R=1;R<=rng.e.r;R++) for(let C=7;C<=12;C++){ const c=ws[XLSX.utils.encode_cell({r:R,c:C})]; if(c&&c.v instanceof Date){ c.t='d'; c.z='m/d/yyyy'; } }
+  ws['!cols']=head.map(h=>({wch:Math.max(10,h.length+2)})); ws['!autofilter']={ref:ws['!ref']};
+  const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Who is responsible');
+  XLSX.writeFile(wb, `Late and Short - who is responsible ${new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'})}.xlsx`);
+}
+$('rq').addEventListener('input',()=>paintResp());
+$('respClear').onclick=()=>{ state.resp={party:'', Factory:'', Customer:''}; $('rq').value=''; paintResp(); };
+$('respExport').onclick=exportResp;
+
 /* ───────────────────── drawer ───────────────────── */
 function kv(pairs){ return pairs.map(([k,v])=>`<div class="k">${k}</div><div class="v">${v||'<span class="dim">–</span>'}</div>`).join(''); }
 function openDrawer(r){
@@ -1333,7 +1470,7 @@ function applyHash(){
 $('copyLink').onclick=()=>{ syncHash(); navigator.clipboard.writeText(location.href).then(()=>toast('Link copied — opens with these filters'),()=>toast(location.href)); };
 
 /* ───────────────────── tabs + filters ───────────────────── */
-const TABS=['board','lines','changes','runs','issues'];
+const TABS=['board','lines','resp','changes','runs','issues'];
 function setTab(t){ state.tab=t; document.querySelectorAll('.tab').forEach(el=>el.classList.toggle('active',el.dataset.tab===t));
   TABS.forEach(n=>$(n+'Panel').classList.toggle('hidden',t!==n)); paint(); syncHash();
   if(t==='changes'&&changeDays<CHANGE_DAYS) loadOlderChanges(); }
@@ -1348,7 +1485,7 @@ async function loadOlderChanges(){   // the board only needs the last two weeks;
   if($('chLoading')) $('chLoading').remove();
 }
 document.querySelectorAll('.tab').forEach(el=>el.onclick=()=>setTab(el.dataset.tab));
-function paint(){ if(state.tab==='board') paintBoard(); else if(state.tab==='lines') paintLines(); else if(state.tab==='changes') paintChanges(); else if(state.tab==='issues') paintIssues(); else paintRuns(); }
+function paint(){ if(state.tab==='board') paintBoard(); else if(state.tab==='lines') paintLines(); else if(state.tab==='resp') paintResp(); else if(state.tab==='changes') paintChanges(); else if(state.tab==='issues') paintIssues(); else paintRuns(); }
 ['q','fCust','fFact','fRound','fSrc','fShip','showGone'].forEach(id=>$(id).addEventListener('input',()=>{ paintLines(); syncHash(); }));
 ['cType','cq'].forEach(id=>$(id).addEventListener('input',paintChanges));
 ['bq','bCust'].forEach(id=>$(id).addEventListener('input',()=>{ state.boardLimit=150; paintBoard(); }));
