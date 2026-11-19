@@ -85,7 +85,7 @@
   .counter[data-k=notrel] .n{color:var(--amb)} .counter[data-k=disagree] .n{color:var(--design)} .counter[data-k=reviewed] .n{color:var(--landed)}
 
   /* action board */
-  .cards{display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; margin-bottom:10px}
+  .cards{display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:12px; margin-bottom:10px}
   .card{padding:16px 18px 14px; cursor:pointer; border-radius:16px; background:rgba(255,255,255,.55); border:1px solid var(--edge);
     transition:.13s; user-select:none; text-align:left; font:inherit; color:inherit}
   .card:hover{background:rgba(255,255,255,.82)}
@@ -796,6 +796,7 @@ function noteRefocus(root, f){
 const CARDS=[
   {k:'new', l:'New since last report'},
   {k:'lfd', l:'Last free day at risk'},
+  {k:'plan', l:'Plan now'},
   {k:'rev', l:'Not reviewed'},
   {k:'past', l:'Past cancel'},
   {k:'resend', l:'Re-send to buyer'},
@@ -915,11 +916,39 @@ function boardData(){
   const conts=new Map();
   act.filter(r=>r._flags.includes('LFDRisk')).forEach(r=>lfdOf(r).forEach(x=>{
     if(!conts.has(x.container)) conts.set(x.container,{...x,lines:[]}); conts.get(x.container).lines.push(r); }));
-  return {nb, newRows:sortByUrgency(newRows), lfd:[...conts.values()].sort((a,b)=>(dayNo(a.lfd)??9e9)-(dayNo(b.lfd)??9e9)),
+  const pos=new Map();   // Plan now: one group per import PO and planning state
+  act.forEach(r=>{ const p=planOf(r); if(!p||!p.due) return; const k=(r.ImportPO||'—')+'|'+p.state;
+    if(!pos.has(k)) pos.set(k,{po:r.ImportPO||'—', state:p.state, factory:r.Factory||'', planBy:p.planBy, sailBy:p.sailBy, ready:null, readyLate:false, lines:[]});
+    const g=pos.get(k); g.lines.push(r); g.planBy=Math.min(g.planBy,p.planBy); g.sailBy=Math.min(g.sailBy,p.sailBy);
+    if(p.ready!=null&&(g.ready==null||p.ready>g.ready)) g.ready=p.ready; if(p.readyLate) g.readyLate=true; });
+  const plan=[...pos.values()].sort((a,b)=>a.planBy-b.planBy||String(a.po).localeCompare(String(b.po)));
+  plan.forEach(g=>g.lines.sort((a,b)=>(dayNo(a.CancelDate)??9e9)-(dayNo(b.CancelDate)??9e9)));
+  return {nb, newRows:sortByUrgency(newRows), lfd:[...conts.values()].sort((a,b)=>(dayNo(a.lfd)??9e9)-(dayNo(b.lfd)??9e9)), plan,
           rev:sortByUrgency(act.filter(r=>!r._past&&(r._needsRev||boardKeep.has(r.Id)))),
           past:act.filter(r=>r._past&&(r._needsRev||boardKeep.has(r.Id)))
                .sort((a,b)=>(dayNo(a.CancelDate)??9e9)-(dayNo(b.CancelDate)??9e9)||String(a.Customer).localeCompare(String(b.Customer))),
           resend:sortByUrgency(act.filter(r=>r._stale||boardKeep.has(r.Id))), act};
+}
+/* Plan now: a line on the container sheet that is not on a container yet (on Booking with no round, or on a round the
+   Open sheet has no container for). Plan by = the last day to put it on a container and still make cancel, using the
+   same targets as Who's responsible: ready to sailing, on the water, port to warehouse. */
+const PLAN_WARN_DAYS=7;
+const dsN=n=>ds(new Date(n*864e5).toISOString());   // a day number as 11/20
+function planOf(r){
+  if(!r._active||r._past) return null;
+  if(!r.SheetLoc||r._flags.includes('NoSupply')||r._flags.includes('PONotFound')) return null;   // not on the container sheet
+  if(SAILED.has(r.ShipStatus)||r._flags.includes('Landed')) return null;
+  const state=!r.RoundNo?'not on a round':(!r.ETD&&!r.Container)?`round ${r.RoundNo}, no container yet`:null;
+  const c=dayNo(r.CancelDate); if(!state||c==null) return null;
+  const sailBy=c-NORM.toWhse-NORM.transit, planBy=sailBy-NORM.readyToSail, ready=dayNo(r.CRD), t=todayNo();
+  const readyLate=ready!=null&&ready>sailBy;   // the factory is ready after the last sailing that makes cancel
+  return {state, sailBy, planBy, ready, readyLate, due:planBy<=t+PLAN_WARN_DAYS||readyLate};
+}
+function planWhen(n){ const d=n-todayNo(); return d<0?`${-d} day${d===-1?'':'s'} late`:d===0?'today':d===1?'tomorrow':`in ${d} days`; }
+function planWhy(r){
+  const p=planOf(r); if(!p) return whyParts(r);
+  return [`plan by ${dsN(p.planBy)} (${planWhen(p.planBy)})`, `must sail by ${dsN(p.sailBy)} for cancel ${ds(r.CancelDate)}`]
+    .concat(p.readyLate?[`ready ${ds(r.CRD)} is after that`]:p.ready!=null?[`ready ${ds(r.CRD)}`]:['no ready date']);
 }
 function buildBoardOptions(){
   const s=$('bCust'), cur=s.value;
@@ -946,13 +975,14 @@ function groupNote(rows){   // "4 lines · 2 late · 1 past cancel · 1 to re-se
 function boardLines(){
   const D=boardData();
   if(state.card==='lfd') return [...new Set(D.lfd.flatMap(g=>g.lines))].filter(boardFilter);
+  if(state.card==='plan') return D.plan.flatMap(g=>g.lines).filter(boardFilter);
   return (state.card==='new'?D.newRows:state.card==='rev'?D.rev:state.card==='past'?D.past:D.resend).filter(boardFilter);
 }
 function exportBoard(){
   if(typeof XLSX==='undefined'){ toast('Excel library did not load — check the network'); return; }
   const rows=boardLines(); if(!rows.length){ toast('Nothing to export'); return; }
   const nb=state.card==='new'?newByLine():null;
-  const why=r=>{ const m=nb&&nb.get(r.Title); return m?NEW_ORDER.filter(t=>m.has(t)).map(t=>changeText(m.get(t))).join(' · '):whyParts(r).join(' · '); };
+  const why=r=>{ const m=nb&&nb.get(r.Title); return m?NEW_ORDER.filter(t=>m.has(t)).map(t=>changeText(m.get(t))).join(' · '):(state.card==='plan'?planWhy(r):whyParts(r)).join(' · '); };
   const asDate=s=>{ if(!s) return null; const d=new Date(d10(s)+'T00:00:00'); return isNaN(d)?null:d; };
   const t=todayNo(), card=CARDS.find(c=>c.k===state.card);
   const head=['Customer','Style','Cust PO','Order','Import PO','Start','Cancel','Days past cancel','Status','Container','ETA','ETA source','In warehouse','Why it is here','Reviewed','Sent to buyer','Notes'];
@@ -983,13 +1013,14 @@ let bulkGroups=[];   // customer headings on the board: {name, ids} for their Ma
 const BHEAD='<div class="bhead"><div>Rev · Sent</div><div>Customer · Style</div><div>Window</div><div>Container</div><div>In whse</div><div>Why it is here</div><div>Notes</div></div>';
 function paintBoard(){
   const D=boardData();
-  const cnt={new:D.newRows.length, lfd:D.lfd.length, rev:D.rev.filter(r=>r._needsRev).length, past:D.past.filter(r=>r._needsRev).length,
+  const cnt={new:D.newRows.length, lfd:D.lfd.length, plan:D.plan.length, rev:D.rev.filter(r=>r._needsRev).length, past:D.past.filter(r=>r._needsRev).length,
              resend:D.resend.filter(r=>r._stale).length};
-  if(!state.card||!CARDS.some(c=>c.k===state.card)) state.card=(CARDS.find(c=>cnt[c.k]>0)||CARDS[2]).k;
+  if(!state.card||!CARDS.some(c=>c.k===state.card)) state.card=(CARDS.find(c=>cnt[c.k]>0)||CARDS.find(c=>c.k==='rev')).k;
   const cut=reportCutoff();
   const subs={
     new: cut?`since ${runWhen(cut)}`:'last 7 days',
     lfd: D.lfd.length?`next: ${rel(D.lfd[0].lfd)} (${ds(D.lfd[0].lfd)})`:'nothing at port near its LFD',
+    plan: D.plan.length?`import POs · first: plan by ${dsN(D.plan[0].planBy)} (${planWhen(D.plan[0].planBy)})`:'nothing to put on a container yet',
     rev: `${D.rev.filter(r=>r._needsRev&&r._late).length} late · ${D.rev.filter(r=>r._needsRev&&r._tight).length} tight`,
     past: cnt.past?(()=>{ const p=D.past.filter(r=>r._needsRev), o=p.filter(pastOld).length; return `${p.length-o} to ask the buyer · ${o} to close in the ERP`; })():'none waiting',
     resend: cnt.resend?`oldest sent ${ds(D.resend.filter(r=>r._stale).map(r=>r.SentToBuyerDate).filter(Boolean).sort()[0])}`:'buyers are up to date',
@@ -1011,6 +1042,13 @@ function paintBoard(){
       html+=`<div class="cgroup"><b>${esc(g.container)}</b><span class="lfdsoon">LFD ${rel(g.lfd)} · ${ds(g.lfd)}</span>`+
         `<span>${esc(g.status||'')}</span><span>${g.pickup&&dayNo(g.pickup)<=dayNo(g.lfd)?'pickup '+ds(g.pickup):`<b style="color:var(--past)">${pickupText(g.pickup,g.lfd)}</b>`}</span>`+
         `<span class="dim">${plural(ls.length,'line')}${ls.length<g.lines.length?' of '+g.lines.length:''}</span></div>`+ls.map(r=>boardRow(r)).join(''); });
+  }else if(state.card==='plan'){
+    D.plan.forEach(g=>{ total+=g.lines.length; const ls=g.lines.filter(boardFilter); if(!ls.length) return; shown+=ls.length;
+      const over=g.planBy<todayNo();
+      html+=`<div class="cgroup"><b>Import PO ${esc(g.po)}</b><span${over?' class="lfdsoon"':' style="font-weight:600"'}>plan by ${dsN(g.planBy)} · ${planWhen(g.planBy)}</span>`+
+        `<span>${esc(g.state)}</span>${g.factory?`<span>${esc(g.factory)}</span>`:''}`+
+        `<span>${g.readyLate?`<b style="color:var(--past)">ready ${dsN(g.ready)}: after the last sailing for cancel (${dsN(g.sailBy)})</b>`:g.ready!=null?'ready '+dsN(g.ready):'no ready date'}</span>`+
+        `<span class="dim">${plural(ls.length,'line')}${ls.length<g.lines.length?' of '+g.lines.length:''}</span></div>`+ls.map(r=>boardRow(r, planWhy(r))).join(''); });
   }else{
     const all=state.card==='new'?D.newRows:state.card==='rev'?D.rev:state.card==='past'?D.past:D.resend, rows=all.filter(boardFilter); shown=rows.length; total=all.length;
     const rowHtml=r=>{ if(state.card!=='new') return boardRow(r);
@@ -1042,7 +1080,7 @@ function paintBoard(){
   $('boardTitle').textContent=card.l;
   $('boardSub').textContent=filtering?`showing ${shown} of ${total}${$('bCust').value?' · '+$('bCust').value:''}`:subs[card.k];
   const nf=noteFocus($('boardList'));
-  repainting=true; try{ $('boardList').innerHTML=shown?BHEAD+html:`<div class="done">${total?'Nothing matches the search.':'All clear ✓'}<span>${total?'Clear the search or customer filter.':({new:'No new problems since the last report.',lfd:'No container at port is close to its last free day without a pickup.',rev:'Every late, tight or flagged line has been reviewed.',past:'No open line past its cancel date is waiting for a review.',resend:'Nothing has changed since it was sent to a buyer.'})[state.card]}</span></div>`; } finally{ repainting=false; }
+  repainting=true; try{ $('boardList').innerHTML=shown?BHEAD+html:`<div class="done">${total?'Nothing matches the search.':'All clear ✓'}<span>${total?'Clear the search or customer filter.':({new:'No new problems since the last report.',lfd:'No container at port is close to its last free day without a pickup.',rev:'Every late, tight or flagged line has been reviewed.',past:'No open line past its cancel date is waiting for a review.',plan:`Every line on the container sheet that is not on a container yet has more than ${PLAN_WARN_DAYS} days before its plan-by date.`,resend:'Nothing has changed since it was sent to a buyer.'})[state.card]}</span></div>`; } finally{ repainting=false; }
   if($('boardMore')) $('boardMore').onclick=e=>{ e.stopPropagation(); state.boardLimit+=150; paintBoard(); };
   wireMarks($('boardList'), true); wireNotes($('boardList'));
   $('boardList').querySelectorAll('button[data-copy]').forEach(b=>{ const g=bulkGroups[+b.dataset.copy];
