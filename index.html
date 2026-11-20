@@ -705,6 +705,7 @@ const COLS=[
   {k:'LineNotes',h:'Notes',f:r=>noteBox(r,'…')},
   {k:'StartDate',h:'Start',d:1},
   {k:'CancelDate',h:'Cancel',d:1},
+  {k:'FirstSeen',h:'First seen',d:1,f:r=>r.FirstSeen?`${fd(r.FirstSeen)} <span class="dim">${todayNo()-dayNo(r.FirstSeen)} d</span>`:'<span class="dim">–</span>'},   // first run the line was on the shortage report (tracking began 9/10)
   {k:'QtyOrd',h:'Ord',n:1},
   {k:'ShortQty',h:'Short',n:1,f:r=>r.ShortQty?`<b style="color:var(--short)">${r.ShortQty}</b>`:'<span class="dim">–</span>'},
   {k:'Factory',h:'Factory'},
@@ -1466,6 +1467,7 @@ $('xlsxBtn').onclick=()=>{
     else if(c.k==='ETA'){ spec.push({h:'ETA',v:r=>asDate(r.ETA),d:1}); spec.push({h:'ETA source',v:r=>r.ETASource||''}); }
     else if(c.k==='ShipStatus') spec.push({h:'Status',v:r=>r.ShipStatus||''});
     else if(c.k==='LineNotes') spec.push({h:'Notes',v:r=>r.LineNotes||''});
+    else if(c.k==='FirstSeen'){ spec.push({h:'First seen',v:r=>asDate(r.FirstSeen),d:1}); spec.push({h:'Days on list',v:r=>r.FirstSeen?todayNo()-dayNo(r.FirstSeen):''}); }
     else if(c.d) spec.push({h:c.h,v:r=>asDate(r[c.k]),d:1});
     else if(c.n) spec.push({h:c.h,v:r=>r[c.k]==null?'':+r[c.k]});
     else spec.push({h:c.h,v:r=>r[c.k]==null?'':r[c.k]});
