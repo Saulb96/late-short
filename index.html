@@ -705,7 +705,7 @@ const COLS=[
   {k:'LineNotes',h:'Notes',f:r=>noteBox(r,'…')},
   {k:'StartDate',h:'Start',d:1},
   {k:'CancelDate',h:'Cancel',d:1},
-  {k:'FirstSeen',h:'First seen',d:1,f:r=>r.FirstSeen?`${fd(r.FirstSeen)} <span class="dim">${todayNo()-dayNo(r.FirstSeen)} d</span>`:'<span class="dim">–</span>'},   // first run the line was on the shortage report (tracking began 9/10)
+  {k:'FirstSeen',h:'Order Date',d:1,f:r=>r.FirstSeen?`${fd(r.FirstSeen)} <span class="dim">${todayNo()-dayNo(r.FirstSeen)} d</span>`:'<span class="dim">–</span>'},   // first run the line was on the shortage report (tracking began 9/10)
   {k:'QtyOrd',h:'Ord',n:1},
   {k:'ShortQty',h:'Short',n:1,f:r=>r.ShortQty?`<b style="color:var(--short)">${r.ShortQty}</b>`:'<span class="dim">–</span>'},
   {k:'Factory',h:'Factory'},
@@ -1267,7 +1267,7 @@ function openDrawer(r){
   $('dTitle').textContent=`${r.Style} · ${r.Customer}`;
   $('dFlags').innerHTML=flagPills(r);
   $('dOrder').innerHTML=kv([['Order',esc(r.OrdNo)],['Customer PO',esc(r.CustPO)],['Start → Cancel',fd(r.StartDate)+' → '+fd(r.CancelDate)],['Ordered / allocated',`${r.QtyOrd??''} / ${r.QtyAlc??''}`+(r.QtyShp?` (shipped ${r.QtyShp})`:'')],['ERP status',esc(r.StatusText)],['Short',r.ShortQty?`<b style="color:var(--short)">${r.ShortQty}</b>`:''],['ERP keyed ETA',r.KeyedETA?(r._disc?`<span class="disc">${fd(r.KeyedETA)} — ${esc((r.ETASource||'').toLowerCase())} says ${fd(r.ETA)}</span>`:fd(r.KeyedETA)):'']]);
-  $('dSupply').innerHTML=kv([['Import PO',esc(r.ImportPO)],['Sheet',esc(r.SheetLoc)],['Round',esc(r.RoundNo)],['Container',esc(r.Container)],['Factory',esc(r.Factory)],['Booked qty (style)',r.BookedQty??''],['Ship by',fd(r.ShipBy)],['CRD',fd(r.CRD)],['ETD',fd(r.ETD)],['ETA used',r.ETA?fd(r.ETA)+srcTag(r):''],['First seen',fd(r.FirstSeen)],['Last changed',fd(r.LastChanged)]]);
+  $('dSupply').innerHTML=kv([['Import PO',esc(r.ImportPO)],['Sheet',esc(r.SheetLoc)],['Round',esc(r.RoundNo)],['Container',esc(r.Container)],['Factory',esc(r.Factory)],['Booked qty (style)',r.BookedQty??''],['Ship by',fd(r.ShipBy)],['CRD',fd(r.CRD)],['ETD',fd(r.ETD)],['ETA used',r.ETA?fd(r.ETA)+srcTag(r):''],['Order Date',fd(r.FirstSeen)],['Last changed',fd(r.LastChanged)]]);
   $('dShip').innerHTML=kv([['Status',shipTag(r)],['Port ETA',r.ETA?fd(r.ETA)+srcTag(r):''],['In our warehouse',fd(r.WhseDate)],['Last free day',r.LFD?`<span class="${r._lfdSoon?'lfdsoon':''}">${fd(r.LFD)}</span>`:''],['Pickup',fd(r.PickupDate)],['Delivery',fd(r.DeliveryDate)],['Released',esc(r.Released)],['Note',r.ShipNote?`<span class="disc">${esc(r.ShipNote)}</span>`:'']]);
   $('dNote').value=noteDrafts[r.Id]??(r.LineNotes||''); $('dNote')._v0=$('dNote').value; $('dNote').onfocus=()=>$('dNote')._v0=$('dNote').value;
   $('dNote').onblur=()=>saveNote(r,$('dNote').value);
@@ -1467,7 +1467,7 @@ $('xlsxBtn').onclick=()=>{
     else if(c.k==='ETA'){ spec.push({h:'ETA',v:r=>asDate(r.ETA),d:1}); spec.push({h:'ETA source',v:r=>r.ETASource||''}); }
     else if(c.k==='ShipStatus') spec.push({h:'Status',v:r=>r.ShipStatus||''});
     else if(c.k==='LineNotes') spec.push({h:'Notes',v:r=>r.LineNotes||''});
-    else if(c.k==='FirstSeen'){ spec.push({h:'First seen',v:r=>asDate(r.FirstSeen),d:1}); spec.push({h:'Days on list',v:r=>r.FirstSeen?todayNo()-dayNo(r.FirstSeen):''}); }
+    else if(c.k==='FirstSeen'){ spec.push({h:'Order Date',v:r=>asDate(r.FirstSeen),d:1}); spec.push({h:'Days since order',v:r=>r.FirstSeen?todayNo()-dayNo(r.FirstSeen):''}); }
     else if(c.d) spec.push({h:c.h,v:r=>asDate(r[c.k]),d:1});
     else if(c.n) spec.push({h:c.h,v:r=>r[c.k]==null?'':+r[c.k]});
     else spec.push({h:c.h,v:r=>r[c.k]==null?'':r[c.k]});
