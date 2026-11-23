@@ -200,6 +200,8 @@
   input.note{width:220px; font-size:12px; padding:4px 8px; border-radius:8px; border:1px solid transparent; background:transparent}
   input.note:hover{border-color:var(--edge); background:rgba(255,255,255,.7)}
   input.note:focus{border-color:var(--edge); background:#fff}
+  .gsty{cursor:help; border-bottom:1px dotted var(--muted)}
+  .gn{font-size:10.5px; color:var(--muted); font-weight:500; margin-left:6px; padding:0 6px; border:1px solid var(--grid); border-radius:8px; white-space:nowrap}
   input.note.unsaved:not(:focus){border-color:var(--amb)}
   .empty{padding:40px; text-align:center; color:var(--muted); font-size:13.5px}
   .rcards{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; margin:6px 0 4px}
@@ -588,9 +590,10 @@ async function load(){
 }
 function mergeById(a, b){ const m=new Map(a.map(x=>[x.Id,x])); (b||[]).forEach(x=>{ if(!m.has(x.Id)) m.set(x.Id,plain(x)); }); return [...m.values()]; }
 function apply(L, C, R, t0){
-  const a=document.activeElement, typing=a&&a.matches&&a.matches('#boardList input[data-note]')?+a.dataset.note:null, old=typing!=null&&lines.find(x=>x.Id===typing);
-  const kept=typing==null?null:boardKeep.has(typing)?boardKeep.get(typing):old?urgency(old):0;
-  boardKeep.clear(); if(kept!=null) boardKeep.set(typing, kept);   // the row being typed in keeps its place
+  const a=document.activeElement, on=s=>!!a&&!!a.matches&&a.matches(s);
+  const typing=on('#boardList input[data-note]')?[+a.dataset.note]:on('#boardList input[data-gnote]')?((groupById.get(a.dataset.gnote)||{})._members||[]).map(r=>r.Id):[];
+  const kept=typing.map(id=>{ const old=lines.find(x=>x.Id===id); return [id, boardKeep.has(id)?boardKeep.get(id):old?urgency(old):0]; });
+  boardKeep.clear(); kept.forEach(([id,u])=>boardKeep.set(id,u));   // the row being typed in keeps its place
   lines=L.map(x=>normLine({...x})); changes=C.map(x=>({...x})).sort((a,b)=>b.Id-a.Id); runs=R.map(x=>({...x})).sort((a,b)=>b.Id-a.Id).slice(0,60);
   lines.forEach(x=>{ const n=noteSaves[x.Id], m=markSaves[x.Id], p=respSaves[x.Id];
     if(n&&n.at>=t0) x.LineNotes=n.text;
@@ -760,17 +763,17 @@ function sorted(rows){
 }
 let repainting=false;
 function paintLines(){
-  const rows=sorted(filtered());
-  $('lineCount').textContent=`${rows.length} of ${lines.filter(r=>r._active).length} lines`;
+  const rows=sorted(filtered()), items=sorted(consolidate(rows));   // again after combining: a row's Ord / Short are its lines' totals
+  $('lineCount').textContent=`${rows.length} of ${lines.filter(r=>r._active).length} lines`+(items.length<rows.length?` · ${items.length} rows (Marmaxx POs combined)`:'');
   const th='<tr>'+COLS.map(c=>`<th data-k="${c.k}">${c.h}${state.sort.k===c.k?`<span class="arrow">${state.sort.d>0?'▲':'▼'}</span>`:''}</th>`).join('')+'</tr>';
-  const tb=rows.length?rows.map(r=>`<tr class="row${r._late?' late':r._tight?' tight':''}${!r._active?' inactive':''}${selected&&selected.Id===r.Id?' sel':''}" data-id="${r.Id}">`+
+  const tb=rows.length?items.map(r=>`<tr class="row${r._late?' late':r._tight?' tight':''}${!r._active?' inactive':''}${selected&&selected.Id===r.Id?' sel':''}" data-id="${r.Id}">`+
     COLS.map(c=>`<td class="${c.n?'num':''}">${c.f?c.f(r):(c.d?fd(r[c.k]):esc(r[c.k]))||'<span class="dim">–</span>'}</td>`).join('')+'</tr>').join('')
     :`<tr><td colspan="${COLS.length}" class="empty">Nothing matches. Clear a filter or wait for the next run.</td></tr>`;
   const t=$('linesTbl'); t.tHead.innerHTML=th; const nf=noteFocus(t.tBodies[0]);
   repainting=true; try{ t.tBodies[0].innerHTML=tb; } finally{ repainting=false; }   // Chrome fires blur on the removed inputs
   t.tHead.querySelectorAll('th').forEach(el=>el.onclick=()=>{ const k=el.dataset.k; state.sort=state.sort.k===k?{k,d:-state.sort.d}:{k,d:1}; paintLines(); });
   t.tBodies[0].querySelectorAll('tr.row').forEach(el=>el.onclick=()=>{ if(!typingIn(el)) openDrawer(lines.find(r=>r.Id==el.dataset.id)); });
-  wireMarks(t.tBodies[0]);
+  wireMarks(t.tBodies[0]); wireGroups(t.tBodies[0]);
   wireNotes(t.tBodies[0]); noteRefocus(t.tBodies[0], nf);
 }
 /* note boxes on the board and in the table: Enter or leaving the box saves, Esc puts the saved text back */
@@ -782,13 +785,15 @@ function wireNotes(root){
       else if(e.key==='Escape'){ e.stopPropagation(); delete noteDrafts[id]; const r=line(); inp.value=(r&&r.LineNotes)||''; inp.classList.remove('unsaved'); inp.blur(); } };
     inp.onblur=()=>{ if(!repainting) saveNote(line(), inp.value); }; });
 }
-const typingIn=el=>{ const a=document.activeElement; return !!a&&!!a.matches&&a.matches('input[data-note]')&&el.contains(a); };
-/* a redraw keeps the note box being typed in: same line, same copy, same cursor (the text is in noteDrafts) */
-function noteFocus(root){ const a=document.activeElement; if(!a||!a.matches||!a.matches('input[data-note]')||!root.contains(a)) return null;
-  return {id:a.dataset.note, i:[...root.querySelectorAll(`input[data-note="${a.dataset.note}"]`)].indexOf(a), s:a.selectionStart, e:a.selectionEnd}; }
+const typingIn=el=>{ const a=document.activeElement; return !!a&&!!a.matches&&a.matches('input[data-note],input[data-gnote]')&&el.contains(a); };
+/* a redraw keeps the note box being typed in: same line (or combined row), same copy, same cursor (the text is in noteDrafts / groupDrafts) */
+function noteFocus(root){ const a=document.activeElement; if(!a||!a.matches||!a.matches('input[data-note],input[data-gnote]')||!root.contains(a)) return null;
+  const attr=a.dataset.note!=null?'note':'gnote', id=a.dataset[attr];
+  return {attr, id, i:[...root.querySelectorAll(`input[data-${attr}="${id}"]`)].indexOf(a), s:a.selectionStart, e:a.selectionEnd}; }
 function noteRefocus(root, f){
-  if(!f) return; const all=root.querySelectorAll(`input[data-note="${f.id}"]`), inp=all[f.i]||all[0];
+  if(!f) return; const all=root.querySelectorAll(`input[data-${f.attr}="${f.id}"]`), inp=all[f.i]||all[0];
   if(inp){ inp.focus(); inp.setSelectionRange(f.s,f.e); return; }
+  if(f.attr!=='note') return;   // a combined row that left the list keeps its typed text in groupDrafts
   const r=lines.find(x=>x.Id==f.id);   // its row left this list: finish the note in the side panel
   if(r) setTimeout(()=>{ openDrawer(r); const dn=$('dNote'), n=dn.value.length; dn.focus(); dn.setSelectionRange(n,n); });
 }
@@ -999,17 +1004,132 @@ function exportBoard(){
   XLSX.writeFile(wb, `Late and Short - ${card.l}${who} ${new Date().toLocaleDateString('en-CA',{timeZone:'America/New_York'})}.xlsx`.replace(/[\\/:*?"<>|]/g,''));
 }
 function boardRow(r, why){
-  const parts=why||whyParts(r), conts=(r.Container||'').split(',').map(x=>x.trim()).filter(Boolean);
+  const parts=why||(r._group?[...new Set(r._members.flatMap(x=>whyParts(x)))]:whyParts(r)), conts=(r.Container||'').split(',').map(x=>x.trim()).filter(Boolean);
   const w=dayNo(r.WhseDate);
   return `<div class="brow${r._late?' late':r._tight?' tight':''}${!r._active?' inactive':''}${selected&&selected.Id===r.Id?' sel':''}" data-id="${r.Id}" tabindex="0" role="button" aria-label="${esc(r.Customer+' '+r.Style)}: open details">
     <div class="checks"><span class="ck"><span class="cl">Reviewed</span>${colOf('Reviewed').f(r)}</span><span class="ck"><span class="cl">Sent</span>${colOf('SentToBuyer').f(r)}</span></div>
-    <div><b>${esc(r.Customer)}</b> · ${esc(r.Style)}<div class="sub">PO ${esc(r.CustPO||'—')} · import ${esc(r.ImportPO||'—')}</div></div>
-    <div><span class="cl">Window </span>${ds(r.StartDate)}–${ds(r.CancelDate)}<div class="sub">${r.ShortQty?`<b style="color:var(--short)">${r.ShortQty} short</b>`:esc(r.OrdNo||'')}</div></div>
+    <div><b>${esc(r.Customer)}</b> · ${r._group?groupStyleCell(r):esc(r.Style)}<div class="sub">PO ${r._group?groupPOCell(r):esc(r.CustPO||'—')} · import ${esc(r.ImportPO||'—')}</div></div>
+    <div><span class="cl">Window </span>${ds(r.StartDate)}–${ds(r.CancelDate)}<div class="sub">${r.ShortQty?`<b style="color:var(--short)">${r.ShortQty} short</b>`:r._group?plural(r._members.length,'line'):esc(r.OrdNo||'')}</div></div>
     <div>${shipTag(r)}<div class="sub" title="${esc(conts.join(', '))}">${esc(conts[0]||'')}${conts.length>1?` +${conts.length-1}`:''}</div></div>
     <div class="wh ${r._late?'bad':r._tight?'warn':''}"><span class="cl">In whse </span>${w!=null?ds(r.WhseDate):'–'}<div class="sub">${r.ETA?'ETA '+ds(r.ETA)+srcTag(r):'no ETA'}</div></div>
     <div class="why">${parts.map((t,i)=>`<span class="${i===0?'lead':''}">${esc(t)}</span>`).join('<span class="dot"> · </span>')}</div>
-    <div class="bn">${noteBox(r,'Add a note…')}</div></div>`;
+    <div class="bn">${r._group?groupNoteBox(r,'Add a note…'):noteBox(r,'Add a note…')}</div></div>`;
 }
+
+/* ───────────────────── Marmaxx: one row per PO ───────────────────── */
+/* Marshalls and TJ Maxx split a PO by DC ("04 503821"). Their lines with the same PO, factory, container, status, port ETA
+   and ship window show as one row on the board and in All lines; ticks and notes on that row apply to every line in it,
+   and hovering the style or PO shows the style / DC breakdown. Counts, exports and the drawer stay per line. */
+const MM_RE=/\bmarshalls\b|\btj\s?maxx\b/i;
+const cleanPO=po=>String(po||'').trim().replace(/\s+/g,' ');
+const basePO=po=>cleanPO(po).replace(/^\d{2} (?=\S+$)/,'');
+const dcOf=po=>{ const m=/^(\d{2}) \S+$/.exec(cleanPO(po)); return m?m[1]:''; };
+const mmKey=r=>MM_RE.test(r.Customer||'')?[r.Customer, basePO(r.CustPO), r.Factory||'', r.Container||'', r.ShipStatus||'', d10(r.ETA), d10(r.StartDate), d10(r.CancelDate), r._active?'':'gone'].join('|'):null;
+const keyId=k=>{ let h=5381; for(let i=0;i<k.length;i++) h=((h<<5)+h+k.charCodeAt(i))|0; return 'g'+(h>>>0).toString(36); };
+const groupById=new Map(), groupDrafts={};   // gid -> combined row; gid -> note typed on a combined row, not saved yet
+/* rows in order, with each Marmaxx PO's lines replaced by one combined row where its first line was */
+function consolidate(rows){
+  const out=[], at=new Map();
+  rows.forEach(r=>{ const k=mmKey(r); if(k==null){ out.push(r); return; }
+    if(at.has(k)) out[at.get(k)].push(r); else { at.set(k, out.length); out.push([r]); } });
+  return out.map(x=>!Array.isArray(x)?x:x.length>1?makeGroup(x, mmKey(x[0])):x[0]);
+}
+function makeGroup(ms, key){
+  const f=ms[0], sum=k=>ms.reduce((s,r)=>s+(+r[k]||0),0), notes=[...new Set(ms.map(r=>(r.LineNotes||'').trim()))];
+  const G=Object.assign({}, f, {_group:true, _members:ms, _gid:keyId(key), CustPO:basePO(f.CustPO), QtyOrd:sum('QtyOrd'), ShortQty:sum('ShortQty'),
+    _flags:[...new Set(ms.flatMap(r=>r._flags))], _sent:ms.every(r=>r._sent), _stale:ms.some(r=>r._stale), _rev:ms.every(r=>r._rev), _needsRev:ms.some(r=>r._needsRev),
+    _late:ms.some(r=>r._late), _tight:!ms.some(r=>r._late)&&ms.some(r=>r._tight), _past:ms.some(r=>r._past), _active:ms.some(r=>r._active),
+    LineNotes:notes.length===1?notes[0]:'', _notes:notes.filter(Boolean), _notesMixed:notes.length>1});
+  G.Flags=G._flags.join(', ');
+  groupById.set(G._gid, G);
+  return G;
+}
+function groupBreakdown(G){
+  const by=new Map(); [...G._members].sort((a,b)=>String(a.Style).localeCompare(String(b.Style))||dcOf(a.CustPO).localeCompare(dcOf(b.CustPO)))
+    .forEach(r=>{ const s=r.Style||'—'; if(!by.has(s)) by.set(s,[]); by.get(s).push(r); });
+  const dcs=new Set(G._members.map(r=>dcOf(r.CustPO)||'?'));
+  return `${plural(G._members.length,'line')}: ${plural(by.size,'style')} across ${plural(dcs.size,'DC')}\n`+[...by].map(([s,rs])=>{
+    const q=rs.reduce((t,r)=>t+(+r.QtyOrd||0),0), sh=rs.reduce((t,r)=>t+(+r.ShortQty||0),0), rv=rs.filter(r=>r._rev).length;
+    return `${s}: DC ${rs.map(r=>dcOf(r.CustPO)||'?').join(', ')} · ${q.toLocaleString('en-US')} ordered${sh?` · ${sh.toLocaleString('en-US')} short`:''}${rv&&rv<rs.length?` · ${rv} of ${rs.length} reviewed`:''}`; }).join('\n');
+}
+function groupStyleCell(G){ const styles=[...new Set(G._members.map(r=>r.Style))];
+  return `<span class="gsty" title="${esc(groupBreakdown(G))}">${esc(styles[0])}${styles.length>1?` +${styles.length-1}`:''}<span class="gn">${G._members.length} lines</span></span>`; }
+function groupPOCell(G){ const dcs=new Set(G._members.map(r=>dcOf(r.CustPO)).filter(Boolean));
+  return `<span class="gsty" title="${esc(groupBreakdown(G))}">${esc(G.CustPO)}${dcs.size?` <span class="dim">${plural(dcs.size,'DC')}</span>`:''}</span>`; }
+function groupCheck(G, kind){   // kind: rev | sent. Ticking marks every line; unticking a full tick clears every line
+  const ms=G._members, n=ms.length, done=kind==='rev'?ms.filter(r=>r._rev).length:ms.filter(r=>r._sent&&!r._stale).length, stale=kind==='sent'&&ms.some(r=>r._stale);
+  const what=kind==='rev'?'Reviewed':'Sent to buyer';
+  return `<label class="${kind}${stale?' stale':''}" title="${what}: ${done} of ${n} lines${stale?'; some changed since sent':''}. Ticking marks all ${n}; unticking clears all.">`+
+    `<input type="checkbox" data-g${kind}="${G._gid}"${done===n?' checked':''}${done&&done<n?' data-mixed="1"':''}> ${stale?'<span style="color:#b4452f">re-send</span>':done&&done<n?`${done}/${n}`:''}</label>`;
+}
+function groupNoteBox(G, ph){
+  const draft=groupDrafts[G._gid], mixed=G._notesMixed;
+  const tip=mixed?`Notes differ across the ${G._members.length} lines:\n`+G._members.map(r=>`${r.Style} DC ${dcOf(r.CustPO)||'?'}: ${r.LineNotes||'(none)'}`).join('\n'):G.LineNotes;
+  return `<input class="note${draft!=null?' unsaved':''}" data-gnote="${G._gid}" value="${esc(draft??G.LineNotes)}" title="${esc(tip)}" `+
+    `placeholder="${mixed?'notes differ: typing sets all '+G._members.length:ph}" aria-label="Note for PO ${esc(G.CustPO)}, ${G._members.length} lines">`;
+}
+/* ticks and notes on combined rows: one save for every line in the row, like the customer Mark buttons */
+async function groupMark(kind, gid, on, keep){
+  if(waitForBulk()||waitForUpdate(true)) return;
+  const G=groupById.get(gid); if(!G) return;
+  const ms=G._members.map(m=>lines.find(x=>x.Id===m.Id)).filter(Boolean);
+  const pick=kind==='rev'?ms.filter(r=>on?!r._rev:r._rev):ms.filter(r=>on?(!r._sent||r._stale):r._sent);
+  if(!pick.length){ afterMarks(); return; }
+  bulkBusy=true;
+  try{
+    if(keep) pick.forEach(r=>{ if(!boardKeep.has(r.Id)) boardKeep.set(r.Id, urgency(r)); });   // on the board, like single ticks
+    const items=pick.map(r=>({id:r.Id, fields:kind==='rev'?revFields(r,on):sentFields(r,on)}));
+    const prev=pick.map(r=>({id:r.Id, fields:Object.fromEntries(Object.keys(items[0].fields).map(k=>[k, markWas(r,k)]))}));
+    const failed=await tracked(patchMany(LISTS.lines, items));
+    items.filter(it=>!failed.has(it.id)).forEach(it=>{ const r=lines.find(x=>x.Id===it.id); if(r) markLocal(r, it.fields); });
+    afterMarks();
+    const what=kind==='rev'?'reviewed':'sent to buyer', ok=items.length-failed.size;
+    toast(failed.size?`PO ${G.CustPO}: ${ok} of ${items.length} lines saved — ${failed.size} not saved (${[...failed.values()][0]})`
+                     :`PO ${G.CustPO}: ${plural(ok,'line')} ${on?'marked '+what:'no longer '+what}`, ok?{label:'Undo', fn:()=>undoMarks(prev.filter(p=>!failed.has(p.id)), what, !on)}:null);
+  }finally{ bulkBusy=false; }
+}
+/* a note on a combined row goes to the lines the row showed when it was typed. It waits for "updating…" or another
+   save to finish instead of being refused, and Download report waits for it (tracked) */
+function saveGroupNote(gid, text, keep){
+  const G=groupById.get(gid); if(!G) return;
+  return tracked(saveNotesOn(G._members.map(r=>r.Id), (text||'').trim(), gid, keep));
+}
+async function saveNotesOn(ids, text, gid, keep){
+  while(staleView&&loading) await loading.catch(()=>{});
+  if(staleView){ toast('Could not update to the latest data — the note was not saved yet; leave the box again to retry'); return; }
+  while(bulkBusy) await new Promise(res=>setTimeout(res,150));
+  const done=()=>{ if(groupDrafts[gid]!=null&&groupDrafts[gid].trim()===text) delete groupDrafts[gid]; };   // typing since then stays
+  const todo=ids.map(id=>lines.find(x=>x.Id===id)).filter(Boolean).filter(r=>(r.LineNotes||'')!==text);
+  if(!todo.length){ done(); afterMarks(); return; }
+  const good=GOOD_NOTE.test(text);   // as on a single line: "good" also ticks Reviewed, and the row keeps its place on the board
+  const held=keep&&good?todo.filter(r=>!boardKeep.has(r.Id)).map(r=>[r.Id, urgency(r)]):[];
+  const items=todo.map(r=>({id:r.Id, fields:Object.assign({LineNotes:text}, good?revFields(r,true):{})}));
+  bulkBusy=true;
+  try{
+    const failed=await patchMany(LISTS.lines, items);
+    items.filter(it=>!failed.has(it.id)).forEach(it=>{ const r=lines.find(x=>x.Id===it.id); if(!r) return;
+      noteSaves[r.Id]={text, at:Date.now()}; const {LineNotes, ...tick}=it.fields; r.LineNotes=text;
+      if(Object.keys(tick).length) markLocal(r, tick); else normLine(r); });
+    held.filter(([id])=>!failed.has(id)).forEach(([id,u])=>boardKeep.set(id,u));
+    if(!failed.size) done();
+    const dn=$('dNote');   // the side panel shows one of these lines: it shows the new note too, unless it is being edited there
+    if(selected&&ids.includes(selected.Id)&&!failed.has(selected.Id)&&(document.activeElement!==dn||dn.value===dn._v0)){ dn.value=text; dn._v0=text; }
+    afterMarks();
+    toast(failed.size?`Note saved on ${items.length-failed.size} of ${items.length} lines — leave the box again to retry`:`Note saved on ${plural(items.length,'line')}${good?' · marked reviewed':''}`);
+  }finally{ bulkBusy=false; }
+}
+function wireGroups(root, keep){
+  root.querySelectorAll('input[data-grev],input[data-gsent]').forEach(cb=>{ if(cb.dataset.mixed) cb.indeterminate=true; cb.onclick=e=>e.stopPropagation();
+    cb.onchange=()=>groupMark(cb.dataset.grev?'rev':'sent', cb.dataset.grev||cb.dataset.gsent, cb.checked, keep); });
+  root.querySelectorAll('input[data-gnote]').forEach(inp=>{ const id=inp.dataset.gnote, saved=()=>(groupById.get(id)||{}).LineNotes||'';
+    inp.onclick=e=>e.stopPropagation();
+    inp.oninput=()=>{ if(inp.value.trim()===saved()) delete groupDrafts[id]; else groupDrafts[id]=inp.value; inp.classList.toggle('unsaved', id in groupDrafts); };
+    inp.onkeydown=e=>{ if(e.key==='Enter') inp.blur();
+      else if(e.key==='Escape'){ e.stopPropagation(); delete groupDrafts[id]; inp.value=saved(); inp.classList.remove('unsaved'); inp.blur(); } };
+    inp.onblur=()=>{ if(!repainting&&inp.value.trim()!==saved()) saveGroupNote(id, inp.value, keep); }; });
+}
+[['SentToBuyer',G=>groupCheck(G,'sent')],['Reviewed',G=>groupCheck(G,'rev')],['LineNotes',G=>groupNoteBox(G,'…')],['Style',groupStyleCell],['CustPO',groupPOCell]]
+  .forEach(([k,gf])=>{ const c=colOf(k), own=c.f; c.f=r=>r._group?gf(r):own?own(r):(esc(r[k])||'<span class="dim">–</span>'); });
 let bulkGroups=[];   // customer headings on the board: {name, ids} for their Mark buttons
 const BHEAD='<div class="bhead"><div>Rev · Sent</div><div>Customer · Style</div><div>Window</div><div>Container</div><div>In whse</div><div>Why it is here</div><div>Notes</div></div>';
 function paintBoard(){
@@ -1042,19 +1162,19 @@ function paintBoard(){
     D.lfd.forEach(g=>{ total+=g.lines.length; const ls=g.lines.filter(boardFilter); if(!ls.length) return; shown+=ls.length;
       html+=`<div class="cgroup"><b>${esc(g.container)}</b><span class="lfdsoon">LFD ${rel(g.lfd)} · ${ds(g.lfd)}</span>`+
         `<span>${esc(g.status||'')}</span><span>${g.pickup&&dayNo(g.pickup)<=dayNo(g.lfd)?'pickup '+ds(g.pickup):`<b style="color:var(--past)">${pickupText(g.pickup,g.lfd)}</b>`}</span>`+
-        `<span class="dim">${plural(ls.length,'line')}${ls.length<g.lines.length?' of '+g.lines.length:''}</span></div>`+ls.map(r=>boardRow(r)).join(''); });
+        `<span class="dim">${plural(ls.length,'line')}${ls.length<g.lines.length?' of '+g.lines.length:''}</span></div>`+consolidate(ls).map(r=>boardRow(r)).join(''); });
   }else if(state.card==='plan'){
     D.plan.forEach(g=>{ total+=g.lines.length; const ls=g.lines.filter(boardFilter); if(!ls.length) return; shown+=ls.length;
       const over=g.planBy<todayNo();
       html+=`<div class="cgroup"><b>Import PO ${esc(g.po)}</b><span${over?' class="lfdsoon"':' style="font-weight:600"'}>plan by ${dsN(g.planBy)} · ${planWhen(g.planBy)}</span>`+
         `<span>${esc(g.state)}</span>${g.factory?`<span>${esc(g.factory)}</span>`:''}`+
         `<span>${g.readyLate?`<b style="color:var(--past)">ready ${dsN(g.ready)}: after the last sailing for cancel (${dsN(g.sailBy)})</b>`:g.ready!=null?'ready '+dsN(g.ready):'no ready date'}</span>`+
-        `<span class="dim">${plural(ls.length,'line')}${ls.length<g.lines.length?' of '+g.lines.length:''}</span></div>`+ls.map(r=>boardRow(r, planWhy(r))).join(''); });
+        `<span class="dim">${plural(ls.length,'line')}${ls.length<g.lines.length?' of '+g.lines.length:''}</span></div>`+consolidate(ls).map(r=>boardRow(r, r._group?[...new Set(r._members.flatMap(x=>planWhy(x)))]:planWhy(r))).join(''); });
   }else{
     const all=state.card==='new'?D.newRows:state.card==='rev'?D.rev:state.card==='past'?D.past:D.resend, rows=all.filter(boardFilter); shown=rows.length; total=all.length;
     const rowHtml=r=>{ if(state.card!=='new') return boardRow(r);
-      const m=D.nb.get(r.Title)||new Map();
-      return boardRow(r, NEW_ORDER.filter(t=>m.has(t)).map(t=>changeText(m.get(t)))); };
+      const texts=[...new Set((r._group?r._members:[r]).flatMap(x=>{ const m=D.nb.get(x.Title)||new Map(); return NEW_ORDER.filter(t=>m.has(t)).map(t=>changeText(m.get(t))); }))];
+      return boardRow(r, texts); };
     // past cancel comes in two parts: recently passed (ask the buyer) and long past (close or cancel in the ERP)
     const parts=state.card==='past'
       ? [{title:'Ask the buyer to extend or cancel', note:`passed in the last ${PAST_OLD_DAYS} days`, rows:rows.filter(r=>!pastOld(r))},
@@ -1071,7 +1191,7 @@ function paintBoard(){
             `<button class="btn sm" data-copy="${gi}" title="Copy these ${g.rows.length} lines as a table to paste into an email to the buyer">Copy for buyer</button>`+
             (nr?`<button class="btn sm" data-bulk="rev" data-g="${gi}" title="Mark the ${nr} lines here that need a review as reviewed">Mark ${nr} reviewed</button>`:'')+
             (ns?`<button class="btn sm" data-bulk="sent" data-g="${gi}" title="Mark the ${ns} lines here that are not sent, or changed since sent, as sent to the buyer today">Mark ${ns} sent</button>`:'')+`</span></div>`; }
-        const take=g.rows.slice(0,left); left-=take.length; html+=take.map(rowHtml).join('');
+        const take=g.rows.slice(0,left); left-=take.length; html+=consolidate(take).map(rowHtml).join('');
       }
     }
     const more=rows.length-state.boardLimit;
@@ -1083,7 +1203,7 @@ function paintBoard(){
   const nf=noteFocus($('boardList'));
   repainting=true; try{ $('boardList').innerHTML=shown?BHEAD+html:`<div class="done">${total?'Nothing matches the search.':'All clear ✓'}<span>${total?'Clear the search or customer filter.':({new:'No new problems since the last report.',lfd:'No container at port is close to its last free day without a pickup.',rev:'Every late, tight or flagged line has been reviewed.',past:'No open line past its cancel date is waiting for a review.',plan:`Every line on the container sheet that is not on a container yet has more than ${PLAN_WARN_DAYS} days before its plan-by date.`,resend:'Nothing has changed since it was sent to a buyer.'})[state.card]}</span></div>`; } finally{ repainting=false; }
   if($('boardMore')) $('boardMore').onclick=e=>{ e.stopPropagation(); state.boardLimit+=150; paintBoard(); };
-  wireMarks($('boardList'), true); wireNotes($('boardList'));
+  wireMarks($('boardList'), true); wireGroups($('boardList'), true); wireNotes($('boardList'));
   $('boardList').querySelectorAll('button[data-copy]').forEach(b=>{ const g=bulkGroups[+b.dataset.copy];
     b.onclick=e=>{ e.stopPropagation(); if(g) copyForBuyer(g.ids, g.name); }; });
   $('boardList').querySelectorAll('button[data-bulk]').forEach(b=>{ const g=bulkGroups[+b.dataset.g];
@@ -1386,14 +1506,14 @@ async function bulkMark(kind, ids, name){
     toast(failed.size?`Marked ${done.length} of ${rows.length} ${what} — ${failed.size} not saved (${[...failed.values()][0]})`:`Marked ${plural(done.length,'line')} ${what} for ${name}`, undo);
   }finally{ bulkBusy=false; }
 }
-async function undoMarks(prev, what){
+async function undoMarks(prev, what, again){
   if(waitForBulk()) return;
   bulkBusy=true;
   try{
     const failed=await tracked(patchMany(LISTS.lines, prev.map(p=>({id:p.id, fields:p.fields}))));
     prev.filter(p=>!failed.has(p.id)).forEach(p=>{ const r=lines.find(x=>x.Id===p.id); if(r) markLocal(r, p.fields); });
     afterMarks();
-    toast(failed.size?`Undo: ${failed.size} of ${prev.length} could not be put back (${[...failed.values()][0]})`:`Undone — ${plural(prev.length,'line')} no longer marked ${what}`);
+    toast(failed.size?`Undo: ${failed.size} of ${prev.length} could not be put back (${[...failed.values()][0]})`:`Undone — ${plural(prev.length,'line')} ${again?'marked '+what+' again':'no longer marked '+what}`);
   }finally{ bulkBusy=false; }
 }
 async function saveNote(r, text){
@@ -1424,7 +1544,7 @@ async function apiToken(){
 async function downloadReport(){
   const btn=$('bReport'); btn.disabled=true; btn.textContent='Building report…';
   try{
-    if(document.activeElement.matches('input[data-note],#dNote')) document.activeElement.blur();   // the note being typed goes in too
+    if(document.activeElement.matches('input[data-note],input[data-gnote],#dNote')) document.activeElement.blur();   // the note being typed goes in too
     if(loading) await loading.catch(()=>{});   // notes refused while "updating…" save when the update lands
     while(savesInflight.size) await Promise.allSettled([...savesInflight]);
     const tok=await apiToken();
