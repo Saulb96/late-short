@@ -201,7 +201,16 @@
   input.note:hover{border-color:var(--edge); background:rgba(255,255,255,.7)}
   input.note:focus{border-color:var(--edge); background:#fff}
   .gsty{cursor:help; border-bottom:1px dotted var(--muted)}
-  .gn{font-size:10.5px; color:var(--muted); font-weight:500; margin-left:6px; padding:0 6px; border:1px solid var(--grid); border-radius:8px; white-space:nowrap}
+  .gn{font-size:10.5px; color:var(--muted); font-weight:500; margin-left:6px; padding:0 6px; border:1px solid var(--grid); border-radius:8px; white-space:nowrap; background:none; cursor:pointer; font-family:inherit}
+  .gn:hover{border-color:var(--edge); color:var(--ink)}
+  .gsub{padding:4px 14px 8px 102px; background:rgba(240,245,251,.55); border-bottom:1px solid var(--grid)}
+  .gline{display:grid; grid-template-columns:56px 120px minmax(150px,1fr) minmax(180px,1.4fr); gap:10px; align-items:center; font-size:12px; padding:3px 0}
+  .gline input.note{width:100%; box-sizing:border-box; border-color:var(--grid); background:rgba(255,255,255,.6)}
+  tr.gsubrow>td{padding:0}
+  tr.gsubrow .gsub{position:sticky; left:0; box-sizing:border-box; width:min(900px, var(--tw, calc(100vw - 120px))); padding-left:40px; white-space:normal}
+  tr.gsubrow .gline{grid-template-columns:56px 140px minmax(90px,230px) minmax(150px,320px); justify-content:start}
+  @media(max-width:760px){ .gsub{padding-left:14px} .gline{grid-template-columns:48px 1fr auto; } .gline input.note{grid-column:1/-1}
+    tr.gsubrow .gsub{width:var(--tw, calc(100vw - 72px)); padding-left:10px} tr.gsubrow .gline{grid-template-columns:48px 1fr auto} }
   input.note.unsaved:not(:focus){border-color:var(--amb)}
   .empty{padding:40px; text-align:center; color:var(--muted); font-size:13.5px}
   .rcards{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; margin:6px 0 4px}
@@ -767,15 +776,19 @@ function paintLines(){
   $('lineCount').textContent=`${rows.length} of ${lines.filter(r=>r._active).length} lines`+(items.length<rows.length?` · ${items.length} rows (Marmaxx POs combined)`:'');
   const th='<tr>'+COLS.map(c=>`<th data-k="${c.k}">${c.h}${state.sort.k===c.k?`<span class="arrow">${state.sort.d>0?'▲':'▼'}</span>`:''}</th>`).join('')+'</tr>';
   const tb=rows.length?items.map(r=>`<tr class="row${r._late?' late':r._tight?' tight':''}${!r._active?' inactive':''}${selected&&selected.Id===r.Id?' sel':''}" data-id="${r.Id}">`+
-    COLS.map(c=>`<td class="${c.n?'num':''}">${c.f?c.f(r):(c.d?fd(r[c.k]):esc(r[c.k]))||'<span class="dim">–</span>'}</td>`).join('')+'</tr>').join('')
+    COLS.map(c=>`<td class="${c.n?'num':''}">${c.f?c.f(r):(c.d?fd(r[c.k]):esc(r[c.k]))||'<span class="dim">–</span>'}</td>`).join('')+'</tr>'+
+    (r._group&&isOpen(r)?`<tr class="gsubrow"><td colspan="${COLS.length}">${groupLinesHtml(r)}</td></tr>`:'')).join('')
     :`<tr><td colspan="${COLS.length}" class="empty">Nothing matches. Clear a filter or wait for the next run.</td></tr>`;
   const t=$('linesTbl'); t.tHead.innerHTML=th; const nf=noteFocus(t.tBodies[0]);
   repainting=true; try{ t.tBodies[0].innerHTML=tb; } finally{ repainting=false; }   // Chrome fires blur on the removed inputs
   t.tHead.querySelectorAll('th').forEach(el=>el.onclick=()=>{ const k=el.dataset.k; state.sort=state.sort.k===k?{k,d:-state.sort.d}:{k,d:1}; paintLines(); });
   t.tBodies[0].querySelectorAll('tr.row').forEach(el=>el.onclick=()=>{ if(!typingIn(el)) openDrawer(lines.find(r=>r.Id==el.dataset.id)); });
   wireMarks(t.tBodies[0]); wireGroups(t.tBodies[0]);
-  wireNotes(t.tBodies[0]); noteRefocus(t.tBodies[0], nf);
+  wireNotes(t.tBodies[0]); noteRefocus(t.tBodies[0], nf); fitSubRows();
 }
+/* an opened combined row in the table stays within the table's visible width, whatever the window size */
+function fitSubRows(){ const t=$('linesTbl'), s=t&&t.parentElement; if(s&&s.clientWidth) t.style.setProperty('--tw', s.clientWidth+'px'); }
+addEventListener('resize', fitSubRows);
 /* note boxes on the board and in the table: Enter or leaving the box saves, Esc puts the saved text back */
 function wireNotes(root){
   root.querySelectorAll('input[data-note]').forEach(inp=>{ const id=inp.dataset.note, line=()=>lines.find(r=>r.Id==id);
@@ -786,13 +799,19 @@ function wireNotes(root){
     inp.onblur=()=>{ if(!repainting) saveNote(line(), inp.value); }; });
 }
 const typingIn=el=>{ const a=document.activeElement; return !!a&&!!a.matches&&a.matches('input[data-note],input[data-gnote]')&&el.contains(a); };
-/* a redraw keeps the note box being typed in: same line (or combined row), same copy, same cursor (the text is in noteDrafts / groupDrafts) */
-function noteFocus(root){ const a=document.activeElement; if(!a||!a.matches||!a.matches('input[data-note],input[data-gnote]')||!root.contains(a)) return null;
-  const attr=a.dataset.note!=null?'note':'gnote', id=a.dataset[attr];
-  return {attr, id, i:[...root.querySelectorAll(`input[data-${attr}="${id}"]`)].indexOf(a), s:a.selectionStart, e:a.selectionEnd}; }
+/* a redraw keeps focus where it was: the note box being typed in (same line or combined row, same copy, same cursor; the
+   text is in noteDrafts / groupDrafts), or a tick box, a "▸ N lines" button or a board row reached with the keyboard */
+const FOCUS_KEYS=['note','gnote','gopen','rev','sent','grev','gsent'];
+const focusSel=f=>`${f.attr==='id'?'.brow':''}[data-${f.attr}="${f.id}"]`;
+function noteFocus(root){ const a=document.activeElement; if(!a||!a.dataset||!root.contains(a)) return null;
+  const attr=FOCUS_KEYS.find(k=>a.dataset[k]!=null)||(a.classList.contains('brow')?'id':null); if(!attr) return null;
+  const f={attr, id:a.dataset[attr], txt:a.matches('input[data-note],input[data-gnote]')};
+  return Object.assign(f, {i:[...root.querySelectorAll(focusSel(f))].indexOf(a), s:f.txt?a.selectionStart:0, e:f.txt?a.selectionEnd:0, v:f.txt?a.value:null}); }
 function noteRefocus(root, f){
-  if(!f) return; const all=root.querySelectorAll(`input[data-${f.attr}="${f.id}"]`), inp=all[f.i]||all[0];
-  if(inp){ inp.focus(); inp.setSelectionRange(f.s,f.e); return; }
+  if(!f) return; const all=root.querySelectorAll(focusSel(f)), inp=all[f.i]||all[0];
+  if(inp){ if(!f.txt){ inp.focus({preventScroll:true}); return; }
+    if(inp.value!==f.v){ inp.value=f.v; if(inp.oninput) inp.oninput(); }   // exactly what was in the box, a trailing space too
+    inp.focus(); inp.setSelectionRange(f.s,f.e); return; }
   if(f.attr!=='note') return;   // a combined row that left the list keeps its typed text in groupDrafts
   const r=lines.find(x=>x.Id==f.id);   // its row left this list: finish the note in the side panel
   if(r) setTimeout(()=>{ openDrawer(r); const dn=$('dNote'), n=dn.value.length; dn.focus(); dn.setSelectionRange(n,n); });
@@ -1013,7 +1032,7 @@ function boardRow(r, why){
     <div>${shipTag(r)}<div class="sub" title="${esc(conts.join(', '))}">${esc(conts[0]||'')}${conts.length>1?` +${conts.length-1}`:''}</div></div>
     <div class="wh ${r._late?'bad':r._tight?'warn':''}"><span class="cl">In whse </span>${w!=null?ds(r.WhseDate):'–'}<div class="sub">${r.ETA?'ETA '+ds(r.ETA)+srcTag(r):'no ETA'}</div></div>
     <div class="why">${parts.map((t,i)=>`<span class="${i===0?'lead':''}">${esc(t)}</span>`).join('<span class="dot"> · </span>')}</div>
-    <div class="bn">${r._group?groupNoteBox(r,'Add a note…'):noteBox(r,'Add a note…')}</div></div>`;
+    <div class="bn">${r._group?groupNoteBox(r,'Add a note…'):noteBox(r,'Add a note…')}</div></div>${r._group&&isOpen(r)?groupLinesHtml(r):''}`;
 }
 
 /* ───────────────────── Marmaxx: one row per PO ───────────────────── */
@@ -1027,12 +1046,13 @@ const dcOf=po=>{ const m=/^(\d{2}) \S+$/.exec(cleanPO(po)); return m?m[1]:''; };
 const mmKey=r=>MM_RE.test(r.Customer||'')?[r.Customer, basePO(r.CustPO), r.Factory||'', r.Container||'', r.ShipStatus||'', d10(r.ETA), d10(r.StartDate), d10(r.CancelDate), r._active?'':'gone'].join('|'):null;
 const keyId=k=>{ let h=5381; for(let i=0;i<k.length;i++) h=((h<<5)+h+k.charCodeAt(i))|0; return 'g'+(h>>>0).toString(36); };
 const groupById=new Map(), groupDrafts={};   // gid -> combined row; gid -> note typed on a combined row, not saved yet
-/* rows in order, with each Marmaxx PO's lines replaced by one combined row where its first line was */
-function consolidate(rows){
+/* rows in order, with each Marmaxx PO's lines replaced by one combined row where its first line was. ctx: a card that
+   splits one PO across headings (Plan now, last free day) passes its heading, so each combined row there has its own id */
+function consolidate(rows, ctx){
   const out=[], at=new Map();
   rows.forEach(r=>{ const k=mmKey(r); if(k==null){ out.push(r); return; }
     if(at.has(k)) out[at.get(k)].push(r); else { at.set(k, out.length); out.push([r]); } });
-  return out.map(x=>!Array.isArray(x)?x:x.length>1?makeGroup(x, mmKey(x[0])):x[0]);
+  return out.map(x=>!Array.isArray(x)?x:x.length>1?makeGroup(x, (ctx?ctx+'|':'')+mmKey(x[0])):x[0]);
 }
 function makeGroup(ms, key){
   const f=ms[0], sum=k=>ms.reduce((s,r)=>s+(+r[k]||0),0), notes=[...new Set(ms.map(r=>(r.LineNotes||'').trim()))];
@@ -1052,8 +1072,21 @@ function groupBreakdown(G){
     const q=rs.reduce((t,r)=>t+(+r.QtyOrd||0),0), sh=rs.reduce((t,r)=>t+(+r.ShortQty||0),0), rv=rs.filter(r=>r._rev).length;
     return `${s}: DC ${rs.map(r=>dcOf(r.CustPO)||'?').join(', ')} · ${q.toLocaleString('en-US')} ordered${sh?` · ${sh.toLocaleString('en-US')} short`:''}${rv&&rv<rs.length?` · ${rv} of ${rs.length} reviewed`:''}`; }).join('\n');
 }
-function groupStyleCell(G){ const styles=[...new Set(G._members.map(r=>r.Style))];
-  return `<span class="gsty" title="${esc(groupBreakdown(G))}">${esc(styles[0])}${styles.length>1?` +${styles.length-1}`:''}<span class="gn">${G._members.length} lines</span></span>`; }
+function groupStyleCell(G){ const styles=[...new Set(G._members.map(r=>r.Style))], open=isOpen(G);
+  return `<span class="gsty" title="${esc(groupBreakdown(G))}">${esc(styles[0])}${styles.length>1?` +${styles.length-1}`:''}</span>`+
+    `<button type="button" class="gn" data-gopen="${G._gid}" aria-expanded="${open}" title="${open?'Hide the lines':'Show each line, with its own note box'}">${open?'▾':'▸'} ${G._members.length} lines</button>`; }
+/* a combined row opened: each of its lines with its own note box (the usual one-line note, saved on Enter or leaving it).
+   Kept by line, so the row stays open when a refresh changes its ETA, status or container */
+const openLines=new Set(), isOpen=G=>G._members.some(m=>openLines.has(m.Id));
+/* a line saved here sits in a combined row on screen: that row's own note box has to catch up */
+function inShownGroup(id){ const root=state.tab==='board'?$('boardList'):state.tab==='lines'?$('linesTbl'):null;
+  return !!root&&[...root.querySelectorAll('input[data-gnote]')].some(g=>((groupById.get(g.dataset.gnote)||{})._members||[]).some(m=>m.Id===id)); }
+function groupLinesHtml(G){
+  const ms=[...G._members].sort((a,b)=>String(a.Style).localeCompare(String(b.Style))||dcOf(a.CustPO).localeCompare(dcOf(b.CustPO)));
+  return `<div class="gsub">`+ms.map(r=>`<div class="gline"><span>DC ${esc(dcOf(r.CustPO)||'?')}</span><span>${esc(r.Style)}</span>`+
+    `<span>${(+r.QtyOrd||0).toLocaleString('en-US')} ordered${r.ShortQty?` · <b style="color:var(--short)">${r.ShortQty} short</b>`:''}${r._rev?' · <span class="dim">reviewed</span>':''}</span>`+
+    `${noteBox(r,'Note for this line…')}</div>`).join('')+'</div>';
+}
 function groupPOCell(G){ const dcs=new Set(G._members.map(r=>dcOf(r.CustPO)).filter(Boolean));
   return `<span class="gsty" title="${esc(groupBreakdown(G))}">${esc(G.CustPO)}${dcs.size?` <span class="dim">${plural(dcs.size,'DC')}</span>`:''}</span>`; }
 function groupCheck(G, kind){   // kind: rev | sent. Ticking marks every line; unticking a full tick clears every line
@@ -1097,7 +1130,7 @@ function saveGroupNote(gid, text, keep){
 async function saveNotesOn(ids, text, gid, keep){
   while(staleView&&loading) await loading.catch(()=>{});
   if(staleView){ toast('Could not update to the latest data — the note was not saved yet; leave the box again to retry'); return; }
-  while(bulkBusy) await new Promise(res=>setTimeout(res,150));
+  return inOrder(async()=>{
   const done=()=>{ if(groupDrafts[gid]!=null&&groupDrafts[gid].trim()===text) delete groupDrafts[gid]; };   // typing since then stays
   const todo=ids.map(id=>lines.find(x=>x.Id===id)).filter(Boolean).filter(r=>(r.LineNotes||'')!==text);
   if(!todo.length){ done(); afterMarks(); return; }
@@ -1117,10 +1150,13 @@ async function saveNotesOn(ids, text, gid, keep){
     afterMarks();
     toast(failed.size?`Note saved on ${items.length-failed.size} of ${items.length} lines — leave the box again to retry`:`Note saved on ${plural(items.length,'line')}${good?' · marked reviewed':''}`);
   }finally{ bulkBusy=false; }
+  });
 }
 function wireGroups(root, keep){
   root.querySelectorAll('input[data-grev],input[data-gsent]').forEach(cb=>{ if(cb.dataset.mixed) cb.indeterminate=true; cb.onclick=e=>e.stopPropagation();
     cb.onchange=()=>groupMark(cb.dataset.grev?'rev':'sent', cb.dataset.grev||cb.dataset.gsent, cb.checked, keep); });
+  root.querySelectorAll('button[data-gopen]').forEach(b=>b.onclick=e=>{ e.stopPropagation(); const G=groupById.get(b.dataset.gopen); if(!G) return;
+    const open=isOpen(G); G._members.forEach(m=>open?openLines.delete(m.Id):openLines.add(m.Id)); b.focus({preventScroll:true}); paint(); });
   root.querySelectorAll('input[data-gnote]').forEach(inp=>{ const id=inp.dataset.gnote, saved=()=>(groupById.get(id)||{}).LineNotes||'';
     inp.onclick=e=>e.stopPropagation();
     inp.oninput=()=>{ if(inp.value.trim()===saved()) delete groupDrafts[id]; else groupDrafts[id]=inp.value; inp.classList.toggle('unsaved', id in groupDrafts); };
@@ -1162,14 +1198,14 @@ function paintBoard(){
     D.lfd.forEach(g=>{ total+=g.lines.length; const ls=g.lines.filter(boardFilter); if(!ls.length) return; shown+=ls.length;
       html+=`<div class="cgroup"><b>${esc(g.container)}</b><span class="lfdsoon">LFD ${rel(g.lfd)} · ${ds(g.lfd)}</span>`+
         `<span>${esc(g.status||'')}</span><span>${g.pickup&&dayNo(g.pickup)<=dayNo(g.lfd)?'pickup '+ds(g.pickup):`<b style="color:var(--past)">${pickupText(g.pickup,g.lfd)}</b>`}</span>`+
-        `<span class="dim">${plural(ls.length,'line')}${ls.length<g.lines.length?' of '+g.lines.length:''}</span></div>`+consolidate(ls).map(r=>boardRow(r)).join(''); });
+        `<span class="dim">${plural(ls.length,'line')}${ls.length<g.lines.length?' of '+g.lines.length:''}</span></div>`+consolidate(ls, 'lfd|'+g.container).map(r=>boardRow(r)).join(''); });
   }else if(state.card==='plan'){
     D.plan.forEach(g=>{ total+=g.lines.length; const ls=g.lines.filter(boardFilter); if(!ls.length) return; shown+=ls.length;
       const over=g.planBy<todayNo();
       html+=`<div class="cgroup"><b>Import PO ${esc(g.po)}</b><span${over?' class="lfdsoon"':' style="font-weight:600"'}>plan by ${dsN(g.planBy)} · ${planWhen(g.planBy)}</span>`+
         `<span>${esc(g.state)}</span>${g.factory?`<span>${esc(g.factory)}</span>`:''}`+
         `<span>${g.readyLate?`<b style="color:var(--past)">ready ${dsN(g.ready)}: after the last sailing for cancel (${dsN(g.sailBy)})</b>`:g.ready!=null?'ready '+dsN(g.ready):'no ready date'}</span>`+
-        `<span class="dim">${plural(ls.length,'line')}${ls.length<g.lines.length?' of '+g.lines.length:''}</span></div>`+consolidate(ls).map(r=>boardRow(r, r._group?[...new Set(r._members.flatMap(x=>planWhy(x)))]:planWhy(r))).join(''); });
+        `<span class="dim">${plural(ls.length,'line')}${ls.length<g.lines.length?' of '+g.lines.length:''}</span></div>`+consolidate(ls, 'plan|'+g.po+'|'+g.state).map(r=>boardRow(r, r._group?[...new Set(r._members.flatMap(x=>planWhy(x)))]:planWhy(r))).join(''); });
   }else{
     const all=state.card==='new'?D.newRows:state.card==='rev'?D.rev:state.card==='past'?D.past:D.resend, rows=all.filter(boardFilter); shown=rows.length; total=all.length;
     const rowHtml=r=>{ if(state.card!=='new') return boardRow(r);
@@ -1484,6 +1520,9 @@ function markLocal(r, fields){
 function afterMarks(){ paintCounters(); paint();
   if(selected){ const s=lines.find(x=>x.Id===selected.Id); if(s){ paintSentState(s); paintRevState(s); $('dFlags').innerHTML=flagPills(s); } } }
 let bulkBusy=false;
+/* note saves go out one at a time in the order they were made, each after any bulk save in flight: the note typed last is the one kept */
+let writeChain=Promise.resolve();
+function inOrder(f){ const p=writeChain.then(async()=>{ while(bulkBusy) await new Promise(res=>setTimeout(res,150)); return f(); }); writeChain=p.catch(()=>{}); return p; }
 function waitForBulk(){ if(!bulkBusy) return false; toast('Still saving the last change — one moment'); afterMarks(); return true; }
 async function bulkMark(kind, ids, name){
   if(waitForBulk()||waitForUpdate(true)) return;
@@ -1522,7 +1561,7 @@ async function saveNote(r, text){
   if(staleView){ notePending.add(r.Id); marks(); toast('Still updating to the latest data — the note will be saved when it is in'); return; }
   const was=lines.find(x=>x.Id===r.Id)||r, tick=GOOD_NOTE.test(text)?revFields(was,true):null;   // one write: the tick is what brings a "good" line back onto the report when the line changes
   const keepAt=tick&&!boardKeep.has(r.Id)?urgency(was):null;
-  try{ await tracked(patchItem(LISTS.lines, r.Id, {LineNotes:text, ...tick})); noteSaves[r.Id]={text, at:Date.now()};
+  try{ await tracked(inOrder(()=>patchItem(LISTS.lines, r.Id, {LineNotes:text, ...tick}))); noteSaves[r.Id]={text, at:Date.now()};
        if(tick) markSaves[r.Id]={fields:{...((markSaves[r.Id]||{}).fields||{}), ...tick}, at:Date.now()};
        const cur=lines.find(x=>x.Id===r.Id)||r; cur.LineNotes=text; Object.assign(cur, tick); normLine(cur); if(cur!==r){ r.LineNotes=text; Object.assign(r, tick); normLine(r); }
        const dn=$('dNote');   // no full repaint: keeps focus. The board and the table each have a box for the line
@@ -1530,6 +1569,7 @@ async function saveNote(r, text){
        document.querySelectorAll(`input[data-note="${r.Id}"]`).forEach(ti=>{ if(ti!==document.activeElement) ti.value=noteDrafts[r.Id]??text; ti.title=text; }); marks();
        if(selected&&selected.Id===r.Id&&(document.activeElement!==dn||dn.value===dn._v0)){ dn.value=text; dn._v0=text; }
        if(tick){ if(keepAt!=null) boardKeep.set(r.Id, keepAt); afterMarks(); }
+       else if(mmKey(cur)!=null&&inShownGroup(r.Id)) afterMarks();   // a combined row holding this line is on screen: its own note box catches up
        toast(tick?'Note saved · marked reviewed':'Note saved'); }
   catch(e){ marks(); toast('Could not save note: '+e.message+' — the text is kept; leave the box again to retry'); }
 }
